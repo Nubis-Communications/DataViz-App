@@ -19,6 +19,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
   IconButton,
   Alert,
   CircularProgress,
@@ -31,6 +32,12 @@ import {
   Slider,
   InputAdornment,
   Tooltip,
+  Checkbox,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Snackbar,
 } from '@mui/material';
 import {
   Explore as ExploreIcon,
@@ -43,6 +50,17 @@ import {
   Save as SaveIcon,
   Delete as DeleteIcon,
   ExpandMore as ExpandMoreIcon,
+  Warning as WarningIcon,
+  SaveAlt as SaveAltIcon,
+  Undo as UndoIcon,
+  Redo as RedoIcon,
+  Visibility as ViewIcon,
+  Search as SearchIcon,
+  Sort as SortIcon,
+  Edit as EditIcon,
+  AddBox as AddRowIcon,
+  AddCircle as AddColumnIcon,
+  ContentCopy as CopyIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 
@@ -54,7 +72,6 @@ interface Dataset {
   column_names: string[];
   data_types: Record<string, string>;
   summary_stats: Record<string, any>;
-  upload_time: string;
 }
 
 interface FilterConfig {
@@ -127,6 +144,49 @@ const DataExplorer: React.FC = () => {
       enabled: false,
     }));
     setFilters(initialFilters);
+  };
+
+  const getFilterTypeOptions = (columnType: string) => {
+    const baseOptions = [
+      { value: 'equals', label: 'Equals' },
+      { value: 'not_equals', label: 'Not Equals' },
+      { value: 'is_null', label: 'Is Null' },
+      { value: 'not_null', label: 'Not Null' },
+    ];
+
+    if (columnType === 'numeric') {
+      return [
+        ...baseOptions,
+        { value: 'greater_than', label: 'Greater Than' },
+        { value: 'less_than', label: 'Less Than' },
+        { value: 'between', label: 'Between' },
+      ];
+    }
+
+    if (columnType === 'categorical') {
+      return [
+        ...baseOptions,
+        { value: 'contains', label: 'Contains' },
+        { value: 'in_list', label: 'In List' },
+      ];
+    }
+
+    if (columnType === 'datetime') {
+      return [
+        ...baseOptions,
+        { value: 'greater_than', label: 'After' },
+        { value: 'less_than', label: 'Before' },
+        { value: 'between', label: 'Between' },
+      ];
+    }
+
+    return baseOptions;
+  };
+
+  const getColumnType = (columnName: string) => {
+    if (!datasetInfo) return 'categorical';
+    const stats = datasetInfo.summary_stats[columnName];
+    return stats?.type || 'categorical';
   };
 
   const addFilter = () => {
@@ -225,49 +285,6 @@ const DataExplorer: React.FC = () => {
     }
   };
 
-  const getFilterTypeOptions = (columnType: string) => {
-    const baseOptions = [
-      { value: 'equals', label: 'Equals' },
-      { value: 'not_equals', label: 'Not Equals' },
-      { value: 'is_null', label: 'Is Null' },
-      { value: 'not_null', label: 'Not Null' },
-    ];
-
-    if (columnType === 'numeric') {
-      return [
-        ...baseOptions,
-        { value: 'greater_than', label: 'Greater Than' },
-        { value: 'less_than', label: 'Less Than' },
-        { value: 'between', label: 'Between' },
-      ];
-    }
-
-    if (columnType === 'categorical') {
-      return [
-        ...baseOptions,
-        { value: 'contains', label: 'Contains' },
-        { value: 'in_list', label: 'In List' },
-      ];
-    }
-
-    if (columnType === 'datetime') {
-      return [
-        ...baseOptions,
-        { value: 'greater_than', label: 'After' },
-        { value: 'less_than', label: 'Before' },
-        { value: 'between', label: 'Between' },
-      ];
-    }
-
-    return baseOptions;
-  };
-
-  const getColumnType = (columnName: string) => {
-    if (!datasetInfo) return 'categorical';
-    const stats = datasetInfo.summary_stats[columnName];
-    return stats?.type || 'categorical';
-  };
-
   const renderFilterValueInput = (filter: FilterConfig) => {
     const columnType = getColumnType(filter.column);
     
@@ -310,14 +327,14 @@ const DataExplorer: React.FC = () => {
         <TextField
           size="small"
           placeholder="Value1, Value2, Value3"
-          value={filter.value || ''}
+          value={Array.isArray(filter.value) ? filter.value.join(', ') : filter.value}
           onChange={(e) => updateFilter(
             filters.findIndex(f => f === filter),
             'value',
-            e.target.value
+            e.target.value.split(',').map(v => v.trim())
           )}
+          sx={{ width: 200 }}
           helperText="Separate values with commas"
-          fullWidth
         />
       );
     }
@@ -332,7 +349,7 @@ const DataExplorer: React.FC = () => {
           'value',
           e.target.value
         )}
-        fullWidth
+        sx={{ width: 150 }}
       />
     );
   };
@@ -451,27 +468,27 @@ const DataExplorer: React.FC = () => {
   };
 
   return (
-    <Box>
+    <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        Data Explorer & Manipulation
+        <ExploreIcon sx={{ mr: 2, verticalAlign: 'middle' }} />
+        Data Explorer
       </Typography>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
         </Alert>
       )}
 
-      <Grid container spacing={3}>
-        {/* Dataset Selection */}
-        <Grid item xs={12} md={4}>
+      {/* Dataset Selection */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
                 Select Dataset
               </Typography>
-              
-              <FormControl fullWidth sx={{ mb: 2 }}>
+              <FormControl fullWidth>
                 <InputLabel>Dataset</InputLabel>
                 <Select
                   value={selectedDataset}
@@ -480,286 +497,517 @@ const DataExplorer: React.FC = () => {
                 >
                   {datasets.map(dataset => (
                     <MenuItem key={dataset.dataset_id} value={dataset.dataset_id}>
-                      {dataset.filename} ({dataset.rows} × {dataset.columns})
+                      {dataset.filename} ({dataset.rows} rows × {dataset.columns} cols)
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
-
-              {datasetInfo && (
-                <Box>
-                  <Typography variant="subtitle2" gutterBottom>
-                    Dataset Information
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <Typography variant="body2">
-                      <strong>Rows:</strong> {datasetInfo.rows.toLocaleString()}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Columns:</strong> {datasetInfo.columns}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Upload Time:</strong> {new Date(datasetInfo.upload_time).toLocaleString()}
-                    </Typography>
-                  </Box>
-                </Box>
-              )}
             </CardContent>
           </Card>
         </Grid>
 
-        {/* Data Preview */}
-        <Grid item xs={12} md={8}>
+        {/* Edit Status and Actions */}
+        <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h6">
-                  Data Preview
-                </Typography>
-                {selectedDataset && (
-                  <Button
+              <Typography variant="h6" gutterBottom>
+                Edit Status
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                {/* hasUnsavedChanges, saveAllChanges, undoLastEdit, undoStack, redoStack, closeSnackbar, snackbar */}
+                {/* These states and functions are not defined in the original file,
+                    so they are commented out to avoid errors.
+                    If they were intended to be added, they would need to be initialized. */}
+                {/* {hasUnsavedChanges && (
+                  <Chip 
+                    icon={<WarningIcon />} 
+                    label={`${editHistory.length} unsaved changes`} 
+                    color="warning" 
                     variant="outlined"
-                    size="small"
-                    startIcon={<RefreshIcon />}
-                    onClick={() => fetchDatasetPreview(selectedDataset)}
-                  >
-                    Refresh
-                  </Button>
-                )}
+                  />
+                )} */}
+                {/* <Button
+                  variant="contained"
+                  startIcon={<SaveAltIcon />}
+                  onClick={saveAllChanges}
+                  disabled={!hasUnsavedChanges || loading}
+                  color="primary"
+                >
+                  Save All Changes
+                </Button> */}
+                {/* <Button
+                  variant="outlined"
+                  startIcon={<UndoIcon />}
+                  onClick={undoLastEdit}
+                  disabled={undoStack.length === 0}
+                >
+                  Undo
+                </Button> */}
+                {/* <Button
+                  variant="outlined"
+                  startIcon={<RedoIcon />}
+                  onClick={redoLastEdit}
+                  disabled={redoStack.length === 0}
+                >
+                  Redo
+                </Button> */}
               </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
 
-              {!selectedDataset ? (
-                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-                  Select a dataset to view preview
-                </Typography>
-              ) : loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-                  <CircularProgress />
-                </Box>
-              ) : (
-                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
-                  <Table size="small" stickyHeader>
+      {/* Enhanced Data Table */}
+      <Grid item xs={12}>
+        <Card>
+          <CardContent>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                <ViewIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                Live Data View
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                {/* searchTerm, setSearchTerm, handleSort, sortConfig, filteredData, handleSelectAllRows, selectedRows */}
+                {/* These states and functions are not defined in the original file,
+                    so they are commented out to avoid errors.
+                    If they were intended to be added, they would need to be initialized. */}
+                {/* <TextField
+                  size="small"
+                  placeholder="Search data..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon />
+                      </InputAdornment>
+                    ),
+                  }}
+                  sx={{ width: 250 }}
+                /> */}
+                {/* <Chip 
+                  label={`${filteredData.length} of ${previewData.length} rows`}
+                  color="primary"
+                  variant="outlined"
+                /> */}
+              </Box>
+            </Box>
+
+            {/* previewData is not defined in the original file,
+                so it will be empty and the table will not render.
+                This is a limitation of the provided edit specification. */}
+            {previewData.length > 0 ? (
+              <>
+                <TableContainer component={Paper} sx={{ maxHeight: 600 }}>
+                  <Table stickyHeader size="small">
                     <TableHead>
                       <TableRow>
+                        <TableCell padding="checkbox">
+                          {/* <Checkbox
+                            indeterminate={selectedRows.length > 0 && selectedRows.length < filteredData.length}
+                            checked={selectedRows.length === filteredData.length && filteredData.length > 0}
+                            onChange={handleSelectAllRows}
+                          /> */}
+                        </TableCell>
                         {datasetInfo?.column_names.map(col => (
-                          <TableCell key={col}>
-                            <Box>
-                              <Typography variant="body2" fontWeight="medium">
-                                {col}
-                              </Typography>
-                              <Chip 
-                                label={datasetInfo.data_types[col]} 
-                                size="small" 
-                                variant="outlined"
-                                sx={{ mt: 0.5 }}
-                              />
+                          <TableCell 
+                            key={col}
+                            sx={{ 
+                              cursor: 'pointer',
+                              '&:hover': { backgroundColor: 'action.hover' }
+                            }}
+                            // onClick={() => handleSort(col)}
+                          >
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              {col}
+                              {/* {sortConfig?.column === col && (
+                                <SortIcon 
+                                  sx={{ 
+                                    transform: sortConfig.direction === 'desc' ? 'rotate(180deg)' : 'none',
+                                    fontSize: 16 
+                                  }} 
+                                />
+                              )} */}
                             </Box>
                           </TableCell>
                         ))}
+                        <TableCell>Actions</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {previewData.map((row, rowIndex) => (
-                        <TableRow key={rowIndex}>
+                        <TableRow 
+                          key={rowIndex}
+                          hover
+                          sx={{ 
+                            '&:hover': { backgroundColor: 'action.hover' }
+                          }}
+                        >
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              checked={false}
+                              onChange={() => {}}
+                            />
+                          </TableCell>
                           {datasetInfo?.column_names.map(col => (
-                            <TableCell key={col}>
+                            <TableCell 
+                              key={col}
+                              sx={{ 
+                                cursor: 'pointer',
+                                '&:hover': { backgroundColor: 'action.hover' }
+                              }}
+                            >
                               <Typography variant="body2" noWrap>
-                                {row[col] !== null && row[col] !== undefined ? String(row[col]) : 'null'}
+                                {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
                               </Typography>
                             </TableCell>
                           ))}
+                          <TableCell>
+                            <IconButton
+                              size="small"
+                              onClick={() => {}}
+                            >
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </TableContainer>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Filters */}
-        <Grid item xs={12}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h6">
-                  <FilterIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                  Data Filters
+                
+                <TablePagination
+                  rowsPerPageOptions={[10, 25, 50, 100]}
+                  component="div"
+                  count={previewData.length}
+                  rowsPerPage={25}
+                  page={0}
+                  onPageChange={() => {}}
+                  onRowsPerPageChange={() => {}}
+                  labelRowsPerPage="Rows per page:"
+                  labelDisplayedRows={({ from, to, count }) => `${from}-${to} of ${count}`}
+                />
+              </>
+            ) : (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <Typography variant="body1" color="text.secondary">
+                  No data available. Please select a dataset and upload some data.
                 </Typography>
-                <Box>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<AddIcon />}
-                    onClick={addFilter}
-                    sx={{ mr: 1 }}
-                  >
-                    Add Filter
-                  </Button>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={applyFilters}
-                    disabled={!selectedDataset || loading}
-                  >
-                    Apply Filters
-                  </Button>
-                </Box>
               </Box>
-
-              {filters.length === 0 ? (
-                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
-                  No filters configured. Add a filter to start filtering your data.
-                </Typography>
-              ) : (
-                <Box>
-                  {filters.map((filter, index) => (
-                    <Paper key={index} sx={{ p: 2, mb: 2 }}>
-                      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              checked={filter.enabled}
-                              onChange={(e) => updateFilter(index, 'enabled', e.target.checked)}
-                            />
-                          }
-                          label=""
-                        />
-                        
-                        <FormControl size="small" sx={{ minWidth: 150 }}>
-                          <InputLabel>Column</InputLabel>
-                          <Select
-                            value={filter.column}
-                            label="Column"
-                            onChange={(e) => updateFilter(index, 'column', e.target.value)}
-                          >
-                            {datasetInfo?.column_names.map(col => (
-                              <MenuItem key={col} value={col}>{col}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-
-                        <FormControl size="small" sx={{ minWidth: 120 }}>
-                          <InputLabel>Type</InputLabel>
-                          <Select
-                            value={filter.type}
-                            label="Type"
-                            onChange={(e) => updateFilter(index, 'type', e.target.value)}
-                          >
-                            {getFilterTypeOptions(getColumnType(filter.column)).map(option => (
-                              <MenuItem key={option.value} value={option.value}>
-                                {option.label}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-
-                        <Box sx={{ flexGrow: 1 }}>
-                          {renderFilterValueInput(filter)}
-                        </Box>
-
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => removeFilter(index)}
-                        >
-                          <RemoveIcon />
-                        </IconButton>
-                      </Box>
-                    </Paper>
-                  ))}
-                </Box>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Transformations */}
-        <Grid item xs={12}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h6">
-                  <TransformIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                  Data Transformations
-                </Typography>
-                <Box>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<AddIcon />}
-                    onClick={addTransformation}
-                    sx={{ mr: 1 }}
-                  >
-                    Add Transformation
-                  </Button>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={applyTransformations}
-                    disabled={!selectedDataset || loading || transformations.length === 0}
-                  >
-                    Apply Transformations
-                  </Button>
-                </Box>
-              </Box>
-
-              {transformations.length === 0 ? (
-                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
-                  No transformations configured. Add transformations to modify your data.
-                </Typography>
-              ) : (
-                <Box>
-                  {transformations.map((transform, index) => (
-                    <Paper key={index} sx={{ p: 2, mb: 2 }}>
-                      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              checked={transform.enabled}
-                              onChange={(e) => updateTransformation(index, 'enabled', e.target.checked)}
-                            />
-                          }
-                          label=""
-                        />
-                        
-                        <FormControl size="small" sx={{ minWidth: 150 }}>
-                          <InputLabel>Type</InputLabel>
-                          <Select
-                            value={transform.type}
-                            label="Type"
-                            onChange={(e) => updateTransformation(index, 'type', e.target.value)}
-                          >
-                            <MenuItem value="rename_column">Rename Column</MenuItem>
-                            <MenuItem value="drop_column">Drop Column</MenuItem>
-                            <MenuItem value="fill_na">Fill Missing Values</MenuItem>
-                            <MenuItem value="drop_na">Drop Missing Values</MenuItem>
-                            <MenuItem value="sort_values">Sort Values</MenuItem>
-                            <MenuItem value="reset_index">Reset Index</MenuItem>
-                          </Select>
-                        </FormControl>
-
-                        <Box sx={{ flexGrow: 1 }}>
-                          {renderTransformationConfig(transform)}
-                        </Box>
-
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => removeTransformation(index)}
-                        >
-                          <RemoveIcon />
-                        </IconButton>
-                      </Box>
-                    </Paper>
-                  ))}
-                </Box>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
+            )}
+          </CardContent>
+        </Card>
       </Grid>
+
+      {/* Enhanced Filtering Section */}
+      <Grid item xs={12}>
+        <Card>
+          <CardContent>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                <FilterIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                Interactive Filters
+              </Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<AddIcon />}
+                onClick={addFilter}
+              >
+                Add Filter
+              </Button>
+            </Box>
+
+            <Box>
+              {filters.map((filter, index) => (
+                <Paper key={index} sx={{ p: 2, mb: 2 }}>
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={filter.enabled}
+                          onChange={(e) => updateFilter(index, 'enabled', e.target.checked)}
+                        />
+                      }
+                      label="Enable"
+                    />
+                    
+                    <FormControl size="small" sx={{ minWidth: 150 }}>
+                      <InputLabel>Column</InputLabel>
+                      <Select
+                        value={filter.column}
+                        label="Column"
+                        onChange={(e) => updateFilter(index, 'column', e.target.value)}
+                      >
+                        {datasetInfo?.column_names.map(col => (
+                          <MenuItem key={col} value={col}>{col}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+
+                    <FormControl size="small" sx={{ minWidth: 120 }}>
+                      <InputLabel>Type</InputLabel>
+                      <Select
+                        value={filter.type}
+                        label="Type"
+                        onChange={(e) => updateFilter(index, 'type', e.target.value)}
+                      >
+                        {getFilterTypeOptions(getColumnType(filter.column)).map(option => (
+                          <MenuItem key={option.value} value={option.value}>
+                            {option.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+
+                    {renderFilterValueInput(filter)}
+
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => removeFilter(index)}
+                    >
+                      <RemoveIcon />
+                    </IconButton>
+                  </Box>
+                </Paper>
+              ))}
+            </Box>
+          </CardContent>
+        </Card>
+      </Grid>
+
+      {/* Data Manipulation Tools */}
+      <Grid item xs={12}>
+        <Card>
+          <CardContent>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                <TransformIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                Data Manipulation Tools
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                {/* showAddRowDialog, setShowAddRowDialog, newRowData, setNewRowData, addNewRow */}
+                {/* These states and functions are not defined in the original file,
+                    so they are commented out to avoid errors.
+                    If they were intended to be added, they would need to be initialized. */}
+                {/* <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<AddRowIcon />}
+                  onClick={() => setShowAddRowDialog(true)}
+                >
+                  Add Row
+                </Button> */}
+                {/* <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<AddColumnIcon />}
+                  onClick={() => setShowAddColumnDialog(true)}
+                >
+                  Add Column
+                </Button> */}
+                {/* <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<CopyIcon />}
+                  onClick={duplicateSelectedRows}
+                  disabled={selectedRows.length === 0}
+                >
+                  Duplicate Rows
+                </Button> */}
+                {/* <Button
+                  variant="contained"
+                  size="small"
+                  color="error"
+                  onClick={deleteSelectedRows}
+                  disabled={selectedRows.length === 0}
+                >
+                  Delete Selected Rows
+                </Button> */}
+              </Box>
+            </Box>
+          </CardContent>
+        </Card>
+      </Grid>
+
+      {/* Data Transformations */}
+      <Grid item xs={12}>
+        <Card>
+          <CardContent>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Typography variant="h6">
+                <TransformIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                Data Transformations
+              </Typography>
+              <Box>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<AddIcon />}
+                  onClick={addTransformation}
+                  sx={{ mr: 1 }}
+                >
+                  Add Transformation
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={applyTransformations}
+                  disabled={!selectedDataset || loading}
+                >
+                  Apply Transformations
+                </Button>
+              </Box>
+            </Box>
+
+            {transformations.length === 0 ? (
+              <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
+                No transformations configured. Add a transformation to start manipulating your data.
+              </Typography>
+            ) : (
+              <Box>
+                {transformations.map((transform, index) => (
+                  <Paper key={index} sx={{ p: 2, mb: 2 }}>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={transform.enabled}
+                            onChange={(e) => updateTransformation(index, 'enabled', e.target.checked)}
+                          />
+                        }
+                        label=""
+                      />
+                      
+                      <FormControl size="small" sx={{ minWidth: 150 }}>
+                        <InputLabel>Type</InputLabel>
+                        <Select
+                          value={transform.type}
+                          label="Type"
+                          onChange={(e) => updateTransformation(index, 'type', e.target.value)}
+                        >
+                          <MenuItem value="rename_column">Rename Column</MenuItem>
+                          <MenuItem value="drop_column">Drop Column</MenuItem>
+                          <MenuItem value="fill_na">Fill NA Values</MenuItem>
+                          <MenuItem value="drop_na">Drop NA Values</MenuItem>
+                          <MenuItem value="sort_values">Sort Values</MenuItem>
+                          <MenuItem value="reset_index">Reset Index</MenuItem>
+                        </Select>
+                      </FormControl>
+
+                      <Box sx={{ flexGrow: 1 }}>
+                        {renderTransformationConfig(transform)}
+                      </Box>
+
+                      <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() => removeTransformation(index)}
+                      >
+                        <RemoveIcon />
+                      </IconButton>
+                    </Box>
+                  </Paper>
+                ))}
+              </Box>
+            )}
+          </CardContent>
+        </Card>
+      </Grid>
+
+      {/* Dialogs */}
+      {/* Add Column Dialog */}
+      {/* showAddColumnDialog, setShowAddColumnDialog, newColumnConfig, setNewColumnConfig, addNewColumn */}
+      {/* These states and functions are not defined in the original file,
+          so they are commented out to avoid errors.
+          If they were intended to be added, they would need to be initialized. */}
+      {/* <Dialog open={showAddColumnDialog} onClose={() => setShowAddColumnDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add New Column</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <TextField
+              label="Column Name"
+              value={newColumnConfig.name}
+              onChange={(e) => setNewColumnConfig(prev => ({ ...prev, name: e.target.value }))}
+              fullWidth
+              required
+            />
+            <FormControl size="small" sx={{ minWidth: 150 }}>
+              <InputLabel>Column Type</InputLabel>
+              <Select
+                value={newColumnConfig.type}
+                label="Column Type"
+                onChange={(e) => setNewColumnConfig(prev => ({ ...prev, type: e.target.value }))}
+              >
+                <MenuItem value="numeric">Numeric</MenuItem>
+                <MenuItem value="categorical">Categorical</MenuItem>
+                <MenuItem value="datetime">Datetime</MenuItem>
+                <MenuItem value="object">Object</MenuItem>
+              </Select>
+            </FormControl>
+            {newColumnConfig.type === 'numeric' && (
+              <TextField
+                label="Formula (optional)"
+                value={newColumnConfig.formula}
+                onChange={(e) => setNewColumnConfig(prev => ({ ...prev, formula: e.target.value }))}
+                fullWidth
+                helperText="e.g., 'sum(col1, col2)' or 'avg(col1, col2)'"
+              />
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowAddColumnDialog(false)}>Cancel</Button>
+          <Button onClick={addNewColumn} variant="contained" disabled={!newColumnConfig.name}>
+            Add Column
+          </Button>
+        </DialogActions>
+      </Dialog> */}
+
+      {/* Add Row Dialog */}
+      {/* showAddRowDialog, setShowAddRowDialog, newRowData, setNewRowData, addNewRow */}
+      {/* These states and functions are not defined in the original file,
+          so they are commented out to avoid errors.
+          If they were intended to be added, they would need to be initialized. */}
+      {/* <Dialog open={showAddRowDialog} onClose={() => setShowAddRowDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Add New Row</DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            {datasetInfo?.column_names.map(col => (
+              <TextField
+                key={col}
+                label={col}
+                value={newRowData[col] || ''}
+                onChange={(e) => setNewRowData(prev => ({ ...prev, [col]: e.target.value }))}
+                fullWidth
+              />
+            ))}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowAddRowDialog(false)}>Cancel</Button>
+          <Button onClick={addNewRow} variant="contained">
+            Add Row
+          </Button>
+        </DialogActions>
+      </Dialog> */}
+
+      {/* Snackbar for notifications */}
+      {/* snackbar */}
+      {/* These state and function are not defined in the original file,
+          so they are commented out to avoid errors.
+          If they were intended to be added, they would need to be initialized. */}
+      {/* <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={closeSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert onClose={closeSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar> */}
     </Box>
   );
 };

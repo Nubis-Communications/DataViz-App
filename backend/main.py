@@ -15,8 +15,10 @@ import os
 # Import from shared module to avoid circular imports
 from shared import datasets, dataset_counter, DataInfo
 
-# Import data operations router
+# Import routers
 from data_operations import router as data_router
+from visualization import router as visualization_router
+from analytics import router as analytics_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -242,8 +244,10 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-# Include data operations router
+# Include routers
 app.include_router(data_router)
+app.include_router(visualization_router)
+app.include_router(analytics_router)
 
 if __name__ == "__main__":
     import uvicorn

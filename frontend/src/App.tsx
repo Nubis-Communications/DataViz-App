@@ -8,7 +8,8 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import DataUpload from './pages/DataUpload';
 import DataExplorer from './pages/DataExplorer';
-import DataVisualization from './pages/DataVisualization';
+import DataVisualizer from './pages/DataVisualizer';
+import AdvancedAnalytics from './pages/AdvancedAnalytics';
 
 // Create professional theme
 const theme = createTheme({
@@ -83,7 +84,8 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/upload" element={<DataUpload />} />
               <Route path="/explorer" element={<DataExplorer />} />
-              <Route path="/visualization" element={<DataVisualization />} />
+              <Route path="/visualization" element={<DataVisualizer />} />
+              <Route path="/analytics" element={<AdvancedAnalytics />} />
             </Routes>
           </Layout>
         </Box>

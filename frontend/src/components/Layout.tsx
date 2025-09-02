@@ -21,6 +21,7 @@ import {
   CloudUpload as UploadIcon,
   Explore as ExploreIcon,
   BarChart as ChartIcon,
+  Analytics as AnalyticsIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -42,7 +43,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
     { text: 'Data Upload', icon: <UploadIcon />, path: '/upload' },
     { text: 'Data Explorer', icon: <ExploreIcon />, path: '/explorer' },
-    { text: 'Visualization', icon: <ChartIcon />, path: '/visualization' },
+    { text: 'Data Visualizer', icon: <ChartIcon />, path: '/visualization' },
+    { text: 'Advanced Analytics', icon: <AnalyticsIcon />, path: '/analytics' },
   ];
 
   const handleDrawerToggle = () => {

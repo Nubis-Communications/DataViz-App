@@ -82,19 +82,23 @@ echo Dependencies ready!
 echo.
 
 :start_servers
-:: Start backend
+:: Start backend in a new window (from backend directory)
 echo Starting backend server...
-start "DataViz Backend" cmd /k "cd /d %CD%\backend && call "%VENV_ACTIVATE%" && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+echo.
+echo IMPORTANT: The backend window will open. Make sure it shows:
+echo "INFO: Application startup complete" and "INFO: Uvicorn running on http://0.0.0.0:8000"
+echo.
+start "DataViz Backend" cmd /k "cd /d %CD%\backend && call "%VENV_ACTIVATE%" && echo Backend server starting from backend directory... && echo Current directory: %CD%\backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
-:: Wait for backend
+:: Wait for backend to start
 echo Waiting for backend to start...
-timeout /t 10 /nobreak >nul
+timeout /t 15 /nobreak >nul
 
-:: Start frontend
+:: Start frontend in a new window
 echo Starting frontend server...
 start "DataViz Frontend" cmd /k "cd /d %CD%\frontend && npm start"
 
-:: Wait for frontend
+:: Wait for frontend to start
 echo Waiting for frontend to start...
 timeout /t 15 /nobreak >nul
 
@@ -109,6 +113,9 @@ echo API Docs: http://localhost:8000/docs
 echo.
 echo Both servers are starting in separate windows.
 echo Close those windows to stop the servers.
+echo.
+echo IMPORTANT: Check the backend window for success message:
+echo "INFO: Uvicorn running on http://0.0.0.0:8000"
 echo.
 echo Press any key to open the platform in your browser...
 pause >nul
@@ -125,5 +132,7 @@ echo.
 echo For network access, other users can connect to:
 echo - Frontend: http://YOUR_SERVER_IP:3000
 echo - Backend: http://YOUR_SERVER_IP:8000
+echo.
+echo Note: User capacity is flexible and depends on server resources
 echo.
 pause

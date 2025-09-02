@@ -24,7 +24,7 @@ class DataInfo:
                 type_mapping[col] = 'object'
                 continue
             
-            # Try to infer numeric types
+            # Try to infer numeric types first
             try:
                 pd.to_numeric(self.df[col], errors='raise')
                 if self.df[col].dtype == 'int64':
@@ -32,10 +32,42 @@ class DataInfo:
                 else:
                     type_mapping[col] = 'float64'
             except (ValueError, TypeError):
-                # Try to infer datetime
+                # Try to infer datetime with better format detection
                 try:
-                    pd.to_datetime(self.df[col], errors='raise')
-                    type_mapping[col] = 'datetime64[ns]'
+                    # Check if column name suggests it's a date/time column
+                    col_lower = col.lower()
+                    date_indicators = ['date', 'time', 'timestamp', 'created', 'updated', 'modified']
+                    is_likely_date = any(indicator in col_lower for indicator in date_indicators)
+                    
+                    if is_likely_date:
+                        # Try common datetime formats first
+                        sample_values = self.df[col].dropna().head(10)
+                        if len(sample_values) > 0:
+                            # Try to parse with common formats
+                            try:
+                                pd.to_datetime(sample_values, format='%Y-%m-%d', errors='raise')
+                                type_mapping[col] = 'datetime64[ns]'
+                                continue
+                            except:
+                                try:
+                                    pd.to_datetime(sample_values, format='%d/%m/%Y', errors='raise')
+                                    type_mapping[col] = 'datetime64[ns]'
+                                    continue
+                                except:
+                                    try:
+                                        pd.to_datetime(sample_values, format='%m/%d/%Y', errors='raise')
+                                        type_mapping[col] = 'datetime64[ns]'
+                                        continue
+                                    except:
+                                        pass
+                    
+                    # If no specific format worked, try generic parsing with warnings suppressed
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        pd.to_datetime(self.df[col], errors='raise')
+                        type_mapping[col] = 'datetime64[ns]'
+                        
                 except (ValueError, TypeError):
                     # Default to object (string)
                     type_mapping[col] = 'object'

@@ -88,7 +88,7 @@ echo.
 echo IMPORTANT: The backend window will open. Make sure it shows:
 echo "INFO: Application startup complete" and "INFO: Uvicorn running on http://0.0.0.0:8000"
 echo.
-start "DataViz Backend" cmd /k "cd /d %CD%\backend && call "%VENV_ACTIVATE%" && echo Backend server starting from backend directory... && echo Current directory: %CD%\backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+start "DataViz Backend" cmd /k "cd /d %CD%\backend && .\venv\Scripts\activate.bat && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
 
 :: Wait for backend to start
 echo Waiting for backend to start...

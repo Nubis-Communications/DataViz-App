@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 echo ========================================
 echo    DataViz Platform - Complete Setup
 echo ========================================

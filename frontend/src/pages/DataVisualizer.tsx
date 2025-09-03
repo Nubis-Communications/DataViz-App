@@ -179,6 +179,17 @@ const DataVisualizer: React.FC = () => {
     }
   }, []);
 
+  // Render charts when plotData changes
+  useEffect(() => {
+    plotData.forEach(plot => {
+      if (plot.data && plot.data.data && plot.data.layout) {
+        setTimeout(() => {
+          renderChartToDOM(plot.chartId, plot.data);
+        }, 100);
+      }
+    });
+  }, [plotData]);
+
   const fetchDatasets = async () => {
     try {
       const response = await axios.get('/datasets');
@@ -201,8 +212,8 @@ const DataVisualizer: React.FC = () => {
 
   const fetchDatasetPreview = async () => {
     try {
-      const response = await axios.get(`/data/${selectedDataset}/preview?rows=100`);
-      setPreviewData(response.data.preview || []);
+      const response = await axios.get(`/dataset/${selectedDataset}/preview?rows=100`);
+      setPreviewData(response.data.preview_data || []);
     } catch (err: any) {
       console.error('Failed to fetch dataset preview:', err);
       setError('Failed to load dataset preview');
@@ -288,11 +299,6 @@ const DataVisualizer: React.FC = () => {
 
       showSnackbar('Chart generated successfully', 'success');
       
-      // Render the chart after a short delay to ensure DOM is ready
-      setTimeout(() => {
-        renderChartToDOM(chart.id, response.data.plot_data);
-      }, 100);
-      
     } catch (err: any) {
       console.error('Chart generation error:', err);
       const errorMessage = err.response?.data?.detail || 'Failed to generate chart';
@@ -348,11 +354,6 @@ const DataVisualizer: React.FC = () => {
       });
 
       showSnackbar('Test chart generated successfully', 'success');
-      
-      // Render the test chart
-      setTimeout(() => {
-        renderChartToDOM('test_chart', response.data.plot_data);
-      }, 100);
       
     } catch (err: any) {
       console.error('Test chart generation error:', err);
@@ -660,7 +661,7 @@ const DataVisualizer: React.FC = () => {
                         <FormControl fullWidth>
                           <InputLabel>Y-Axis</InputLabel>
                           <Select
-                            value={chart.yAxis}
+                            value={chart.xAxis}
                             label="Y-Axis"
                             onChange={(e) => updateChart(chart.id, { yAxis: e.target.value as string })}
                             fullWidth
@@ -706,7 +707,7 @@ const DataVisualizer: React.FC = () => {
                           <InputLabel>Group By</InputLabel>
                           <Select
                             value={chart.groupBy}
-                            label="Group By"
+                            label="Color By"
                             onChange={(e) => updateChart(chart.id, { groupBy: e.target.value as string })}
                             fullWidth
                           >
@@ -862,7 +863,7 @@ const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => {
       aria-labelledby={`chart-tab-${index}`}
     >
       {value === index && <Box sx={{ p: 2 }}>{children}</Box>}
-    </div>
+        </div>
   );
 };
 

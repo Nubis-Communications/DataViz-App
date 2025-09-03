@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Box,
   Grid,
@@ -55,6 +55,13 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 
+// Declare Plotly as a global variable
+declare global {
+  interface Window {
+    Plotly: any;
+  }
+}
+
 interface Dataset {
   dataset_id: string;
   filename: string;
@@ -98,6 +105,36 @@ interface PlotData {
   timestamp: number;
 }
 
+// Chart type definitions
+const chartTypes = [
+  { value: 'bar', label: 'Bar Chart', icon: <BarChartIcon />, description: 'Vertical or horizontal bars for categorical data' },
+  { value: 'line', label: 'Line Chart', icon: <LineChartIcon />, description: 'Connected points for trends over time' },
+  { value: 'scatter', label: 'Scatter Plot', icon: <ScatterIcon />, description: 'Points for correlation between variables' },
+  { value: 'pie', label: 'Pie Chart', icon: <PieChartIcon />, description: 'Circular segments for proportions' },
+  { value: 'heatmap', label: 'Heatmap', icon: <HeatmapIcon />, description: 'Color-coded matrix for correlations' },
+  { value: 'bubble', label: 'Bubble Chart', icon: <BubbleIcon />, description: 'Bubbles with size representing third variable' },
+  { value: 'histogram', label: 'Histogram', icon: <TimelineIcon />, description: 'Bars for distribution of values' },
+  { value: 'box', label: 'Box Plot', icon: <TableIcon />, description: 'Statistical summary with quartiles' },
+];
+
+// Theme and color options
+const themes = [
+  { value: 'plotly_white', label: 'Plotly White' },
+  { value: 'plotly_dark', label: 'Plotly Dark' },
+  { value: 'simple_white', label: 'Simple White' },
+  { value: 'ggplot2', label: 'ggplot2' },
+  { value: 'seaborn', label: 'Seaborn' },
+];
+
+const colorPalettes = [
+  { value: 'default', label: 'Default' },
+  { value: 'viridis', label: 'Viridis' },
+  { value: 'plasma', label: 'Plasma' },
+  { value: 'inferno', label: 'Inferno' },
+  { value: 'magma', label: 'Magma' },
+  { value: 'cividis', label: 'Cividis' },
+];
+
 const DataVisualizer: React.FC = () => {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDataset, setSelectedDataset] = useState<string>('');
@@ -108,92 +145,95 @@ const DataVisualizer: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
-  const [showChartDialog, setShowChartDialog] = useState(false);
-  const [editingChart, setEditingChart] = useState<ChartConfig | null>(null);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' | 'info' }>({
-    open: false,
-    message: '',
-    severity: 'info'
-  });
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'warning' | 'info' });
+  
+  // Refs for chart containers
+  const chartRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
-  // Chart type options
-  const chartTypes = [
-    { value: 'bar', label: 'Bar Chart', icon: <BarChartIcon />, description: 'Categorical data comparison' },
-    { value: 'line', label: 'Line Chart', icon: <LineChartIcon />, description: 'Trends over time or sequence' },
-    { value: 'scatter', label: 'Scatter Plot', icon: <ScatterIcon />, description: 'Correlation between two variables' },
-    { value: 'pie', label: 'Pie Chart', icon: <PieChartIcon />, description: 'Proportional composition' },
-    { value: 'heatmap', label: 'Heatmap', icon: <HeatmapIcon />, description: 'Matrix data visualization' },
-    { value: 'bubble', label: 'Bubble Chart', icon: <BubbleIcon />, description: 'Three-dimensional data' },
-    { value: 'histogram', label: 'Histogram', icon: <BarChartIcon />, description: 'Distribution of values' },
-    { value: 'box', label: 'Box Plot', icon: <BarChartIcon />, description: 'Statistical distribution' },
-  ];
-
-  // Theme options
-  const themes = [
-    { value: 'default', label: 'Default', description: 'Clean, professional look' },
-    { value: 'dark', label: 'Dark Theme', description: 'High contrast, modern' },
-    { value: 'light', label: 'Light Theme', description: 'Bright, clear visualization' },
-    { value: 'minimal', label: 'Minimal', description: 'Simple, focused design' },
-    { value: 'corporate', label: 'Corporate', description: 'Business presentation style' },
-  ];
-
-  // Color palettes
-  const colorPalettes = [
-    { value: 'default', label: 'Default', description: 'Standard color scheme' },
-    { value: 'viridis', label: 'Viridis', description: 'Perceptually uniform' },
-    { value: 'plasma', label: 'Plasma', description: 'High contrast sequential' },
-    { value: 'inferno', label: 'Inferno', description: 'Dark to light gradient' },
-    { value: 'magma', label: 'Magma', description: 'Smooth color transitions' },
-    { value: 'cividis', label: 'Cividis', description: 'Colorblind friendly' },
-  ];
-
+  // Load datasets on component mount
   useEffect(() => {
     fetchDatasets();
   }, []);
 
+  // Load dataset info when selection changes
   useEffect(() => {
     if (selectedDataset) {
-      fetchDatasetInfo(selectedDataset);
-      fetchDatasetPreview(selectedDataset);
+      fetchDatasetInfo();
+      fetchDatasetPreview();
     }
   }, [selectedDataset]);
+
+  // Load Plotly.js if not already loaded
+  useEffect(() => {
+    if (!window.Plotly) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.plot.ly/plotly-latest.min.js';
+      script.onload = () => {
+        console.log('Plotly.js loaded successfully');
+      };
+      script.onerror = () => {
+        console.error('Failed to load Plotly.js');
+        setError('Failed to load chart library. Please refresh the page.');
+      };
+      document.head.appendChild(script);
+    }
+  }, []);
 
   const fetchDatasets = async () => {
     try {
       const response = await axios.get('/datasets');
-      setDatasets(response.data.datasets);
+      setDatasets(response.data.datasets || []);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to fetch datasets');
+      console.error('Failed to fetch datasets:', err);
+      setError('Failed to load datasets');
     }
   };
 
-  const fetchDatasetInfo = async (datasetId: string) => {
+  const fetchDatasetInfo = async () => {
     try {
-      const response = await axios.get(`/dataset/${datasetId}`);
+      const response = await axios.get(`/dataset/${selectedDataset}`);
       setDatasetInfo(response.data);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to fetch dataset info');
+      console.error('Failed to fetch dataset info:', err);
+      setError('Failed to load dataset information');
     }
   };
 
-  const fetchDatasetPreview = async (datasetId: string, rows: number = 100) => {
+  const fetchDatasetPreview = async () => {
     try {
-      const response = await axios.get(`/dataset/${datasetId}/preview?rows=${rows}`);
-      setPreviewData(response.data.preview_data);
+      const response = await axios.get(`/data/${selectedDataset}/preview?rows=100`);
+      setPreviewData(response.data.preview || []);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to fetch preview data');
+      console.error('Failed to fetch dataset preview:', err);
+      setError('Failed to load dataset preview');
     }
+  };
+
+  const getNumericColumns = () => {
+    if (!datasetInfo) return [];
+    return datasetInfo.column_names.filter(col => {
+      const dataType = datasetInfo.data_types[col];
+      return dataType === 'int64' || dataType === 'float64' || dataType === 'number';
+    });
+  };
+
+  const showSnackbar = (message: string, severity: 'success' | 'error' | 'warning' | 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
+
+  const closeSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false });
   };
 
   const addChart = () => {
     const newChart: ChartConfig = {
       id: `chart_${Date.now()}`,
       type: 'bar',
-      title: 'New Chart',
+      title: `New Chart ${charts.length + 1}`,
       xAxis: datasetInfo?.column_names[0] || '',
-      yAxis: datasetInfo?.column_names[1] || '',
+      yAxis: getNumericColumns()[0] || '',
       customizations: {
-        theme: 'default',
+        theme: 'plotly_white',
         colorPalette: 'default',
         opacity: 0.8,
         showGrid: true,
@@ -224,15 +264,14 @@ const DataVisualizer: React.FC = () => {
 
     try {
       setLoading(true);
+      setError(null);
       
-      // Prepare chart data based on type
-      const chartData = prepareChartData(chart);
+      console.log('Generating chart with config:', chart);
       
-      // Generate plot using backend
-      const response = await axios.post(`/visualize/${selectedDataset}/generate`, {
-        chart_config: chart,
-        data: chartData
-      });
+      // Generate plot using backend - send only the chart config
+      const response = await axios.post(`/visualize/${selectedDataset}/generate`, chart);
+
+      console.log('Backend response:', response.data);
 
       // Update plot data
       const newPlot: PlotData = {
@@ -249,52 +288,113 @@ const DataVisualizer: React.FC = () => {
 
       showSnackbar('Chart generated successfully', 'success');
       
+      // Render the chart after a short delay to ensure DOM is ready
+      setTimeout(() => {
+        renderChartToDOM(chart.id, response.data.plot_data);
+      }, 100);
+      
     } catch (err: any) {
-      showSnackbar(err.response?.data?.detail || 'Failed to generate chart', 'error');
+      console.error('Chart generation error:', err);
+      const errorMessage = err.response?.data?.detail || 'Failed to generate chart';
+      setError(errorMessage);
+      showSnackbar(errorMessage, 'error');
     } finally {
       setLoading(false);
     }
   };
 
-  const prepareChartData = (chart: ChartConfig) => {
-    if (!previewData.length) return [];
+  const generateTestChart = async () => {
+    if (!selectedDataset) return;
 
-    const { xAxis, yAxis, colorBy, sizeBy, groupBy, aggregation } = chart;
-    
-    // Basic data preparation
-    let preparedData = previewData.map(row => ({
-      x: row[xAxis],
-      y: row[yAxis],
-      color: colorBy ? row[colorBy] : undefined,
-      size: sizeBy ? row[sizeBy] : undefined,
-      group: groupBy ? row[groupBy] : undefined,
-    }));
+    try {
+      setLoading(true);
+      setError(null);
+      
+      console.log('Generating test chart...');
+      
+      const response = await axios.post(`/visualize/${selectedDataset}/test`);
 
-    // Apply aggregation if specified
-    if (aggregation && groupBy) {
-      const grouped = preparedData.reduce((acc, item) => {
-        const key = item.group;
-        if (!acc[key]) {
-          acc[key] = { count: 0, sum: 0, values: [] };
-        }
-        acc[key].count++;
-        acc[key].sum += Number(item.y) || 0;
-        acc[key].values.push(item.y);
-        return acc;
-      }, {} as Record<string, any>);
+      console.log('Test chart response:', response.data);
 
-      preparedData = Object.entries(grouped).map(([key, data]) => ({
-        x: key,
-        y: aggregation === 'sum' ? data.sum : 
-           aggregation === 'count' ? data.count : 
-           aggregation === 'mean' ? data.sum / data.count : data.sum,
-        color: undefined,
-        size: undefined,
-        group: key,
-      }));
+      // Update plot data with test chart
+      const newPlot: PlotData = {
+        chartId: 'test_chart',
+        data: response.data.plot_data,
+        config: {
+          id: 'test_chart',
+          type: 'scatter',
+          title: 'Test Chart',
+          xAxis: response.data.test_info.x_column,
+          yAxis: response.data.test_info.y_column,
+          customizations: {
+            theme: 'plotly_white',
+            colorPalette: 'default',
+            opacity: 0.8,
+            showGrid: true,
+            showLegend: true,
+            showLabels: false,
+            fontSize: 12,
+            width: 600,
+            height: 400
+          },
+          enabled: true
+        },
+        timestamp: Date.now()
+      };
+
+      setPlotData(prev => {
+        const filtered = prev.filter(plot => plot.chartId !== 'test_chart');
+        return [...filtered, newPlot];
+      });
+
+      showSnackbar('Test chart generated successfully', 'success');
+      
+      // Render the test chart
+      setTimeout(() => {
+        renderChartToDOM('test_chart', response.data.plot_data);
+      }, 100);
+      
+    } catch (err: any) {
+      console.error('Test chart generation error:', err);
+      const errorMessage = err.response?.data?.detail || 'Failed to generate test chart';
+      setError(errorMessage);
+      showSnackbar(errorMessage, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const renderChartToDOM = (chartId: string, plotData: any) => {
+    if (!window.Plotly) {
+      console.error('Plotly not available');
+      return;
     }
 
-    return preparedData;
+    const chartContainer = chartRefs.current[chartId];
+    if (!chartContainer) {
+      console.error(`Chart container not found for ${chartId}`);
+      return;
+    }
+
+    try {
+      console.log(`Rendering chart ${chartId} with data:`, plotData);
+      
+      // Clear the container
+      chartContainer.innerHTML = '';
+      
+      // Create the chart
+      window.Plotly.newPlot(chartContainer, plotData.data, plotData.layout, {
+        responsive: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+        displaylogo: false
+      });
+      
+      console.log(`Chart ${chartId} rendered successfully`);
+    } catch (err) {
+      console.error(`Error rendering chart ${chartId}:`, err);
+      chartContainer.innerHTML = `<div style="padding: 20px; text-align: center; color: red;">Error rendering chart: ${err}</div>`;
+    }
   };
 
   const exportChart = async (chartId: string, format: 'png' | 'svg' | 'pdf' | 'html') => {
@@ -325,30 +425,6 @@ const DataVisualizer: React.FC = () => {
     }
   };
 
-  const showSnackbar = (message: string, severity: 'success' | 'error' | 'warning' | 'info') => {
-    setSnackbar({ open: true, message, severity });
-  };
-
-  const closeSnackbar = () => {
-    setSnackbar(prev => ({ ...prev, open: false }));
-  };
-
-  const getNumericColumns = () => {
-    if (!datasetInfo) return [];
-    return datasetInfo.column_names.filter(col => {
-      const stats = datasetInfo.summary_stats[col];
-      return stats?.type === 'numeric';
-    });
-  };
-
-  const getCategoricalColumns = () => {
-    if (!datasetInfo) return [];
-    return datasetInfo.column_names.filter(col => {
-      const stats = datasetInfo.summary_stats[col];
-      return stats?.type === 'categorical';
-    });
-  };
-
   const renderChartPreview = (chart: ChartConfig) => {
     const plot = plotData.find(p => p.chartId === chart.id);
     
@@ -360,35 +436,66 @@ const DataVisualizer: React.FC = () => {
           justifyContent: 'center', 
           height: chart.customizations.height,
           backgroundColor: 'grey.100',
-          borderRadius: 1
+          borderRadius: 1,
+          flexDirection: 'column',
+          gap: 2
         }}>
           <Typography variant="body2" color="text.secondary">
-            Click "Generate Chart" to create visualization
+            No chart data available
           </Typography>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => generateChart(chart)}
+            disabled={loading || !selectedDataset}
+            startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />}
+          >
+            {loading ? 'Generating...' : 'Generate Chart'}
+          </Button>
         </Box>
       );
     }
 
-    // For now, show a placeholder. In a real implementation, you'd render the actual chart
+    // Render the chart container
     return (
       <Box sx={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
         height: chart.customizations.height,
-        backgroundColor: 'primary.light',
+        width: '100%',
+        border: '1px solid',
+        borderColor: 'divider',
         borderRadius: 1,
-        color: 'white'
+        overflow: 'hidden'
       }}>
-        <Typography variant="h6">
-          {chart.title} - {chart.type.toUpperCase()}
-        </Typography>
+        <div
+          ref={el => chartRefs.current[chart.id] = el}
+          id={`chart-container-${chart.id}`}
+          style={{
+            width: '100%',
+            height: '100%',
+            minHeight: '300px'
+          }}
+        />
+        {/* Export Options */}
+        <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {['png', 'svg', 'pdf', 'html'].map(format => (
+            <Button
+              key={format}
+              size="small"
+              variant="outlined"
+              startIcon={<DownloadIcon />}
+              onClick={() => exportChart(chart.id, format as any)}
+              disabled={!plotData.find(p => p.chartId === chart.id)}
+            >
+              {format.toUpperCase()}
+            </Button>
+          ))}
+        </Box>
       </Box>
     );
   };
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 2 }}>
       <Typography variant="h4" gutterBottom>
         <BarChartIcon sx={{ mr: 2, verticalAlign: 'middle' }} />
         Data Visualizer
@@ -400,77 +507,70 @@ const DataVisualizer: React.FC = () => {
         </Alert>
       )}
 
-      {/* Dataset Selection */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={6}>
+      <Grid container spacing={2}>
+        <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Select Dataset
+                Datasets
               </Typography>
               <FormControl fullWidth>
-                <InputLabel>Dataset</InputLabel>
+                <InputLabel>Select Dataset</InputLabel>
                 <Select
                   value={selectedDataset}
-                  label="Dataset"
-                  onChange={(e) => setSelectedDataset(e.target.value)}
+                  label="Select Dataset"
+                  onChange={(e) => setSelectedDataset(e.target.value as string)}
+                  fullWidth
                 >
-                  {datasets.map(dataset => (
+                  {datasets.map((dataset) => (
                     <MenuItem key={dataset.dataset_id} value={dataset.dataset_id}>
-                      {dataset.filename} ({dataset.rows} rows × {dataset.columns} cols)
+                      {dataset.filename}
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
+              {datasetInfo && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="body1">
+                    <strong>Dataset:</strong> {datasetInfo.filename}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Rows: {datasetInfo.rows}, Columns: {datasetInfo.columns}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Data Types: {Object.entries(datasetInfo.data_types).map(([col, type]) => `${col}: ${type}`).join(', ')}
+                  </Typography>
+                </Box>
+              )}
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                onClick={addChart}
+                fullWidth
+                sx={{ mt: 2 }}
+              >
+                Add New Chart
+              </Button>
+              <Button
+                variant="contained"
+                color="secondary"
+                startIcon={<ViewIcon />}
+                onClick={generateTestChart}
+                disabled={!selectedDataset || loading}
+                fullWidth
+                sx={{ mt: 1 }}
+              >
+                Test Chart
+              </Button>
             </CardContent>
           </Card>
         </Grid>
-
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={8}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Quick Actions
+                Charts
               </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  onClick={addChart}
-                  disabled={!selectedDataset}
-                >
-                  Add Chart
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<RefreshIcon />}
-                  onClick={() => selectedDataset && fetchDatasetPreview(selectedDataset)}
-                  disabled={!selectedDataset}
-                >
-                  Refresh Data
-                </Button>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Main Content Tabs */}
-      <Card>
-        <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
-          <Tab label="Chart Builder" icon={<TuneIcon />} />
-          <Tab label="Gallery" icon={<ViewIcon />} />
-          <Tab label="Customization" icon={<PaletteIcon />} />
-        </Tabs>
-
-        <Box sx={{ p: 3 }}>
-          {activeTab === 0 && (
-            /* Chart Builder Tab */
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Create and Configure Charts
-              </Typography>
-              
               {charts.length === 0 ? (
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <Typography variant="body1" color="text.secondary" gutterBottom>
@@ -486,332 +586,283 @@ const DataVisualizer: React.FC = () => {
                   </Button>
                 </Box>
               ) : (
-                <Grid container spacing={3}>
-                  {charts.map((chart) => (
-                    <Grid item xs={12} md={6} key={chart.id}>
-                      <Card>
-                        <CardContent>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                            <Typography variant="h6">{chart.title}</Typography>
-                            <Box>
-                              <IconButton
-                                size="small"
-                                onClick={() => generateChart(chart)}
-                                disabled={loading || !selectedDataset}
-                              >
-                                <RefreshIcon />
-                              </IconButton>
-                              <IconButton
-                                size="small"
-                                onClick={() => removeChart(chart.id)}
-                              >
-                                <RemoveIcon />
-                              </IconButton>
-                            </Box>
+                <>
+                  <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
+                    {charts.map((chart, index) => (
+                      <Tab
+                        key={chart.id}
+                        label={
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {chartTypes.find(type => type.value === chart.type)?.icon}
+                            {chart.title}
                           </Box>
-
-                          {/* Chart Configuration */}
-                          <Box sx={{ mb: 2 }}>
-                            <Grid container spacing={2}>
-                              <Grid item xs={6}>
-                                <FormControl fullWidth size="small">
-                                  <InputLabel>Type</InputLabel>
-                                  <Select
-                                    value={chart.type}
-                                    label="Type"
-                                    onChange={(e) => updateChart(chart.id, { type: e.target.value })}
-                                  >
-                                    {chartTypes.map(type => (
-                                      <MenuItem key={type.value} value={type.value}>
-                                        {type.icon} {type.label}
-                                      </MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </Grid>
-                              <Grid item xs={6}>
-                                <TextField
-                                  fullWidth
-                                  size="small"
-                                  label="Title"
-                                  value={chart.title}
-                                  onChange={(e) => updateChart(chart.id, { title: e.target.value })}
-                                />
-                              </Grid>
-                              <Grid item xs={6}>
-                                <FormControl fullWidth size="small">
-                                  <InputLabel>X Axis</InputLabel>
-                                  <Select
-                                    value={chart.xAxis}
-                                    label="X Axis"
-                                    onChange={(e) => updateChart(chart.id, { xAxis: e.target.value })}
-                                  >
-                                    {datasetInfo?.column_names.map(col => (
-                                      <MenuItem key={col} value={col}>{col}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </Grid>
-                              <Grid item xs={6}>
-                                <FormControl fullWidth size="small">
-                                  <InputLabel>Y Axis</InputLabel>
-                                  <Select
-                                    value={chart.yAxis}
-                                    label="Y Axis"
-                                    onChange={(e) => updateChart(chart.id, { yAxis: e.target.value })}
-                                  >
-                                    {getNumericColumns().map(col => (
-                                      <MenuItem key={col} value={col}>{col}</MenuItem>
-                                    ))}
-                                  </Select>
-                                </FormControl>
-                              </Grid>
-                            </Grid>
-                          </Box>
-
-                          {/* Chart Preview */}
-                          {renderChartPreview(chart)}
-
-                          {/* Export Options */}
-                          <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                            {['png', 'svg', 'pdf', 'html'].map(format => (
-                              <Button
-                                key={format}
-                                size="small"
-                                variant="outlined"
-                                startIcon={<DownloadIcon />}
-                                onClick={() => exportChart(chart.id, format as any)}
-                                disabled={!plotData.find(p => p.chartId === chart.id)}
-                              >
-                                {format.toUpperCase()}
-                              </Button>
-                            ))}
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  ))}
-                </Grid>
-              )}
-            </Box>
-          )}
-
-          {activeTab === 1 && (
-            /* Gallery Tab */
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Chart Gallery & Templates
-              </Typography>
-              
-              <Grid container spacing={3}>
-                {chartTypes.map((chartType) => (
-                  <Grid item xs={12} md={4} key={chartType.value}>
-                    <Card sx={{ cursor: 'pointer', '&:hover': { elevation: 4 } }}>
-                      <CardContent>
-                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                          {chartType.icon}
-                          <Typography variant="h6" sx={{ ml: 1 }}>
-                            {chartType.label}
-                          </Typography>
+                        }
+                        icon={chartTypes.find(type => type.value === chart.type)?.icon}
+                        iconPosition="start"
+                      />
+                    ))}
+                  </Tabs>
+                  <Divider />
+                  {charts.map((chart, index) => (
+                    <TabPanel key={chart.id} value={activeTab} index={index}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                        <Typography variant="h6">{chart.title}</Typography>
+                        <Box>
+                          <IconButton onClick={() => generateChart(chart)} disabled={loading || !selectedDataset}>
+                            {loading ? <CircularProgress size={20} /> : <RefreshIcon />}
+                          </IconButton>
+                          <IconButton onClick={() => removeChart(chart.id)}>
+                            <RemoveIcon />
+                          </IconButton>
                         </Box>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {chartType.description}
-                        </Typography>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={() => {
-                            addChart();
-                            // Set the new chart to this type
-                            const newChart = charts[charts.length - 1];
-                            if (newChart) {
-                              updateChart(newChart.id, { type: chartType.value });
-                            }
+                      </Box>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={chart.enabled}
+                              onChange={(e) => updateChart(chart.id, { enabled: e.target.checked })}
+                              name="enabled"
+                            />
+                          }
+                          label="Enabled"
+                        />
+                        <FormControl fullWidth>
+                          <InputLabel>Chart Type</InputLabel>
+                          <Select
+                            value={chart.type}
+                            label="Chart Type"
+                            onChange={(e) => updateChart(chart.id, { type: e.target.value as string })}
+                            fullWidth
+                          >
+                            {chartTypes.map((type) => (
+                              <MenuItem key={type.value} value={type.value}>
+                                {type.label}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>X-Axis</InputLabel>
+                          <Select
+                            value={chart.xAxis}
+                            label="X-Axis"
+                            onChange={(e) => updateChart(chart.id, { xAxis: e.target.value as string })}
+                            fullWidth
+                          >
+                            {datasetInfo?.column_names.map((col) => (
+                              <MenuItem key={col} value={col}>
+                                {col}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Y-Axis</InputLabel>
+                          <Select
+                            value={chart.yAxis}
+                            label="Y-Axis"
+                            onChange={(e) => updateChart(chart.id, { yAxis: e.target.value as string })}
+                            fullWidth
+                          >
+                            {getNumericColumns().map((col) => (
+                              <MenuItem key={col} value={col}>
+                                {col}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Color By</InputLabel>
+                          <Select
+                            value={chart.colorBy}
+                            label="Color By"
+                            onChange={(e) => updateChart(chart.id, { colorBy: e.target.value as string })}
+                            fullWidth
+                          >
+                            {datasetInfo?.column_names.map((col) => (
+                              <MenuItem key={col} value={col}>
+                                {col}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Size By</InputLabel>
+                          <Select
+                            value={chart.sizeBy}
+                            label="Size By"
+                            onChange={(e) => updateChart(chart.id, { sizeBy: e.target.value as string })}
+                            fullWidth
+                          >
+                            {datasetInfo?.column_names.map((col) => (
+                              <MenuItem key={col} value={col}>
+                                {col}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Group By</InputLabel>
+                          <Select
+                            value={chart.groupBy}
+                            label="Group By"
+                            onChange={(e) => updateChart(chart.id, { groupBy: e.target.value as string })}
+                            fullWidth
+                          >
+                            {datasetInfo?.column_names.map((col) => (
+                              <MenuItem key={col} value={col}>
+                                {col}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Aggregation</InputLabel>
+                          <Select
+                            value={chart.aggregation}
+                            label="Aggregation"
+                            onChange={(e) => updateChart(chart.id, { aggregation: e.target.value as string })}
+                            fullWidth
+                          >
+                            <MenuItem value="">None</MenuItem>
+                            <MenuItem value="mean">Mean</MenuItem>
+                            <MenuItem value="sum">Sum</MenuItem>
+                            <MenuItem value="count">Count</MenuItem>
+                            <MenuItem value="min">Min</MenuItem>
+                            <MenuItem value="max">Max</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Theme</InputLabel>
+                          <Select
+                            value={chart.customizations.theme}
+                            label="Theme"
+                            onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, theme: e.target.value as string } })}
+                            fullWidth
+                          >
+                            {themes.map((theme) => (
+                              <MenuItem key={theme.value} value={theme.value}>
+                                {theme.label}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth>
+                          <InputLabel>Color Palette</InputLabel>
+                          <Select
+                            value={chart.customizations.colorPalette}
+                            label="Color Palette"
+                            onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, colorPalette: e.target.value as string } })}
+                            fullWidth
+                          >
+                            {colorPalettes.map((palette) => (
+                              <MenuItem key={palette.value} value={palette.value}>
+                                {palette.label}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={chart.customizations.showGrid}
+                              onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, showGrid: e.target.checked } })}
+                              name="showGrid"
+                            />
+                          }
+                          label="Show Grid"
+                        />
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={chart.customizations.showLegend}
+                              onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, showLegend: e.target.checked } })}
+                              name="showLegend"
+                            />
+                          }
+                          label="Show Legend"
+                        />
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={chart.customizations.showLabels}
+                              onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, showLabels: e.target.checked } })}
+                              name="showLabels"
+                            />
+                          }
+                          label="Show Labels"
+                        />
+                        <TextField
+                          label="Font Size"
+                          type="number"
+                          value={chart.customizations.fontSize}
+                          onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, fontSize: parseInt(e.target.value, 10) } })}
+                          InputProps={{
+                            endAdornment: <InputAdornment position="end">px</InputAdornment>,
                           }}
-                          disabled={!selectedDataset}
-                        >
-                          Use Template
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                ))}
-              </Grid>
-            </Box>
-          )}
-
-          {activeTab === 2 && (
-            /* Customization Tab */
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Chart Customization & Themes
-              </Typography>
-              
-              <Grid container spacing={3}>
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom>
-                        Theme Settings
-                      </Typography>
-                      
-                      <FormControl fullWidth sx={{ mb: 2 }}>
-                        <InputLabel>Theme</InputLabel>
-                        <Select
-                          value={charts[0]?.customizations.theme || 'default'}
-                          label="Theme"
-                          onChange={(e) => {
-                            charts.forEach(chart => {
-                              updateChart(chart.id, {
-                                customizations: { ...chart.customizations, theme: e.target.value }
-                              });
-                            });
+                          fullWidth
+                        />
+                        <TextField
+                          label="Width"
+                          type="number"
+                          value={chart.customizations.width}
+                          onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, width: parseInt(e.target.value, 10) } })}
+                          InputProps={{
+                            endAdornment: <InputAdornment position="end">px</InputAdornment>,
                           }}
-                        >
-                          {themes.map(theme => (
-                            <MenuItem key={theme.value} value={theme.value}>
-                              {theme.label}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-
-                      <FormControl fullWidth sx={{ mb: 2 }}>
-                        <InputLabel>Color Palette</InputLabel>
-                        <Select
-                          value={charts[0]?.customizations.colorPalette || 'default'}
-                          label="Color Palette"
-                          onChange={(e) => {
-                            charts.forEach(chart => {
-                              updateChart(chart.id, {
-                                customizations: { ...chart.customizations, colorPalette: e.target.value }
-                              });
-                            });
+                          fullWidth
+                        />
+                        <TextField
+                          label="Height"
+                          type="number"
+                          value={chart.customizations.height}
+                          onChange={(e) => updateChart(chart.id, { customizations: { ...chart.customizations, height: parseInt(e.target.value, 10) } })}
+                          InputProps={{
+                            endAdornment: <InputAdornment position="end">px</InputAdornment>,
                           }}
-                        >
-                          {colorPalettes.map(palette => (
-                            <MenuItem key={palette.value} value={palette.value}>
-                              {palette.label}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-
-                      <Typography gutterBottom>Opacity</Typography>
-                      <Slider
-                        value={charts[0]?.customizations.opacity || 0.8}
-                        onChange={(e, value) => {
-                          charts.forEach(chart => {
-                            updateChart(chart.id, {
-                              customizations: { ...chart.customizations, opacity: value as number }
-                            });
-                          });
-                        }}
-                        min={0.1}
-                        max={1}
-                        step={0.1}
-                        marks
-                        valueLabelDisplay="auto"
-                      />
-                    </CardContent>
-                  </Card>
-                </Grid>
-
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Typography variant="h6" gutterBottom>
-                        Display Options
-                      </Typography>
-                      
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={charts[0]?.customizations.showGrid || false}
-                            onChange={(e) => {
-                              charts.forEach(chart => {
-                                updateChart(chart.id, {
-                                  customizations: { ...chart.customizations, showGrid: e.target.checked }
-                                });
-                              });
-                            }}
-                          />
-                        }
-                        label="Show Grid"
-                        sx={{ mb: 1 }}
-                      />
-
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={charts[0]?.customizations.showLegend || false}
-                            onChange={(e) => {
-                              charts.forEach(chart => {
-                                updateChart(chart.id, {
-                                  customizations: { ...chart.customizations, showLegend: e.target.checked }
-                                });
-                              });
-                            }}
-                          />
-                        }
-                        label="Show Legend"
-                        sx={{ mb: 1 }}
-                      />
-
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={charts[0]?.customizations.showLabels || false}
-                            onChange={(e) => {
-                              charts.forEach(chart => {
-                                updateChart(chart.id, {
-                                  customizations: { ...chart.customizations, showLabels: e.target.checked }
-                                });
-                              });
-                            }}
-                          />
-                        }
-                        label="Show Labels"
-                        sx={{ mb: 1 }}
-                      />
-
-                      <Typography gutterBottom>Font Size</Typography>
-                      <Slider
-                        value={charts[0]?.customizations.fontSize || 12}
-                        onChange={(e, value) => {
-                          charts.forEach(chart => {
-                            updateChart(chart.id, {
-                              customizations: { ...chart.customizations, fontSize: value as number }
-                            });
-                          });
-                        }}
-                        min={8}
-                        max={24}
-                        step={1}
-                        marks
-                        valueLabelDisplay="auto"
-                      />
-                    </CardContent>
-                  </Card>
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-        </Box>
-      </Card>
-
-      {/* Snackbar for notifications */}
+                          fullWidth
+                        />
+                      </Box>
+                      {renderChartPreview(chart)}
+                    </TabPanel>
+                  ))}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
       <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={closeSnackbar}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
       >
         <Alert onClose={closeSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
           {snackbar.message}
         </Alert>
       </Snackbar>
     </Box>
+  );
+};
+
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => {
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`chart-tabpanel-${index}`}
+      aria-labelledby={`chart-tab-${index}`}
+    >
+      {value === index && <Box sx={{ p: 2 }}>{children}</Box>}
+    </div>
   );
 };
 

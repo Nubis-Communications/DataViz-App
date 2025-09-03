@@ -1,6 +1,7 @@
 @echo off
+setlocal enabledelayedexpansion
 echo ========================================
-echo    DataViz Platform - Complete Setup
+echo    DataViz Platform - Enhanced Setup
 echo ========================================
 echo.
 
@@ -82,17 +83,22 @@ echo Dependencies ready!
 echo.
 
 :start_servers
-:: Start backend in a new window (from backend directory with proper working directory)
-echo Starting backend server...
+:: Start backend using the robust startup approach
+echo Starting backend server with enhanced error checking...
 echo.
-echo IMPORTANT: The backend window will open. Make sure it shows:
-echo "INFO: Application startup complete" and "INFO: Uvicorn running on http://127.0.0.1:8000"
+echo IMPORTANT: The backend window will open and test imports first.
+echo Look for these success messages:
+echo "✅ Main module imported successfully"
+echo "✅ Visualization module imported successfully"
+echo "INFO: Uvicorn running on http://127.0.0.1:8000"
 echo.
-start "DataViz Backend" cmd /k "cd /d %CD%\backend && .\venv\Scripts\activate.bat && uvicorn main:app --host 127.0.0.1 --port 8000 --reload"
+
+:: Use the robust backend startup approach
+start "DataViz Backend (Enhanced)" cmd /k "cd /d %CD%\backend && .\venv\Scripts\activate.bat && echo Testing imports... && python -c "import main; print('✅ Main module imported successfully')" && python -c "import visualization; print('✅ Visualization module imported successfully')" && echo Starting server... && uvicorn main:app --host 127.0.0.1 --port 8000 --reload"
 
 :: Wait for backend to start
-echo Waiting for backend to start...
-timeout /t 15 /nobreak >nul
+echo Waiting for backend to start and test imports...
+timeout /t 20 /nobreak >nul
 
 :: Start frontend in a new window
 echo Starting frontend server...
@@ -114,8 +120,12 @@ echo.
 echo Both servers are starting in separate windows.
 echo Close those windows to stop the servers.
 echo.
-echo IMPORTANT: Check the backend window for success message:
+echo IMPORTANT: Check the backend window for these success messages:
+echo "✅ Main module imported successfully"
+echo "✅ Visualization module imported successfully"
 echo "INFO: Uvicorn running on http://127.0.0.1:8000"
+echo.
+echo If you see import errors, the backend will not start properly.
 echo.
 echo Press any key to open the platform in your browser...
 pause >nul
@@ -134,5 +144,10 @@ echo - Frontend: http://YOUR_SERVER_IP:3000
 echo - Backend: http://YOUR_SERVER_IP:8000
 echo.
 echo Note: User capacity is flexible and depends on server resources
+echo.
+echo 🔧 Troubleshooting:
+echo - If backend fails to start, check the backend window for import errors
+echo - If charts don't work, run: python test_frontend_charts.py
+echo - If backend crashes, check for missing dependencies
 echo.
 pause

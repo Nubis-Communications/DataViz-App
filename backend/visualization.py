@@ -2,8 +2,15 @@ from fastapi import APIRouter, HTTPException, Body, Response
 from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import seaborn as sns
+    sns.set_palette("husl")
+except ImportError:
+    sns = None
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.utils
@@ -21,8 +28,13 @@ router = APIRouter(prefix="/visualize", tags=["visualization"])
 from shared import datasets
 
 # Set matplotlib style for professional plots
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+try:
+    plt.style.use('seaborn-v0_8')
+except:
+    try:
+        plt.style.use('seaborn')
+    except:
+        plt.style.use('default')
 
 @router.post("/{dataset_id}/generate")
 async def generate_chart(
@@ -37,6 +49,9 @@ async def generate_chart(
     df = data_info.df
     
     try:
+        # Log the incoming request for debugging
+        logger.info(f"Generating chart for dataset {dataset_id}: {chart_config}")
+        
         chart_type = chart_config.get("type", "bar")
         x_axis = chart_config.get("xAxis")
         y_axis = chart_config.get("yAxis")
@@ -46,7 +61,11 @@ async def generate_chart(
             raise HTTPException(status_code=400, detail="X and Y axes must be specified")
         
         if x_axis not in df.columns or y_axis not in df.columns:
-            raise HTTPException(status_code=400, detail="Specified columns not found in dataset")
+            available_columns = list(df.columns)
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Specified columns not found in dataset. Available columns: {available_columns}"
+            )
         
         # Generate chart data based on type
         chart_data = generate_chart_data(df, chart_type, x_axis, y_axis, chart_config)
@@ -60,6 +79,8 @@ async def generate_chart(
         # Convert to JSON for frontend
         plot_json = json.loads(fig.to_json())
         
+        logger.info(f"Chart generated successfully: {chart_type} chart with {len(chart_data.get('x', []))} data points")
+        
         return {
             "chart_id": chart_config.get("id"),
             "plot_data": plot_json,
@@ -67,9 +88,74 @@ async def generate_chart(
             "generated_at": datetime.now().isoformat()
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         logger.error(f"Chart generation error: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Chart generation failed: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error details: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chart generation failed: {str(e)}")
+
+@router.post("/{dataset_id}/test")
+async def test_chart_generation(dataset_id: str):
+    """Generate a test chart to validate functionality"""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    try:
+        data_info = datasets[dataset_id]
+        df = data_info.df
+        
+        # Find suitable columns for testing
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        if len(numeric_cols) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 numeric columns for test chart")
+        
+        # Create a simple test chart
+        x_col = numeric_cols[0]
+        y_col = numeric_cols[1]
+        
+        # Generate sample data (first 20 rows to avoid overwhelming)
+        sample_df = df.head(20)
+        
+        # Create a simple scatter plot
+        fig = go.Figure(data=[
+            go.Scatter(
+                x=sample_df[x_col].tolist(),
+                y=sample_df[y_col].tolist(),
+                mode='markers',
+                name=f'Test Chart: {x_col} vs {y_col}'
+            )
+        ])
+        
+        fig.update_layout(
+            title=f"Test Chart - {x_col} vs {y_col}",
+            xaxis_title=x_col,
+            yaxis_title=y_col,
+            template="plotly_white"
+        )
+        
+        plot_json = json.loads(fig.to_json())
+        
+        return {
+            "chart_id": "test_chart",
+            "plot_data": plot_json,
+            "chart_type": "scatter",
+            "generated_at": datetime.now().isoformat(),
+            "test_info": {
+                "x_column": x_col,
+                "y_column": y_col,
+                "data_points": len(sample_df),
+                "message": "Test chart generated successfully"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Test chart generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Test chart generation failed: {str(e)}")
 
 @router.post("/{dataset_id}/export")
 async def export_chart(
@@ -90,6 +176,8 @@ async def export_chart(
         
         if format_type == "png":
             # Create a simple matplotlib figure for PNG export
+            if plt is None:
+                raise HTTPException(status_code=400, detail="Matplotlib not available for PNG export")
             fig, ax = plt.subplots(figsize=(8, 6))
             ax.text(0.5, 0.5, f"Chart: {config.get('title', 'Untitled')}", 
                    ha='center', va='center', transform=ax.transAxes, fontsize=16)
@@ -105,6 +193,8 @@ async def export_chart(
             
         elif format_type == "svg":
             # SVG export
+            if plt is None:
+                raise HTTPException(status_code=400, detail="Matplotlib not available for SVG export")
             fig, ax = plt.subplots(figsize=(8, 6))
             ax.text(0.5, 0.5, f"Chart: {config.get('title', 'Untitled')}", 
                    ha='center', va='center', transform=ax.transAxes, fontsize=16)
@@ -119,6 +209,8 @@ async def export_chart(
             
         elif format_type == "pdf":
             # PDF export
+            if plt is None:
+                raise HTTPException(status_code=400, detail="Matplotlib not available for PDF export")
             fig, ax = plt.subplots(figsize=(8, 6))
             ax.text(0.5, 0.5, f"Chart: {config.get('title', 'Untitled')}", 
                    ha='center', va='center', transform=ax.transAxes, fontsize=16)

@@ -96,6 +96,30 @@ const DataExplorer: React.FC = () => {
   const [transformations, setTransformations] = useState<TransformationConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Enhanced state for live data view and filtering
+  const [filteredData, setFilteredData] = useState<any[]>([]);
+  const [showFullTable, setShowFullTable] = useState(false);
+  const [showHead, setShowHead] = useState(true); // true for head(5), false for tail(5)
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortConfig, setSortConfig] = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null);
+  const [selectedRows, setSelectedRows] = useState<number[]>([]);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  
+  // Data manipulation states
+  const [showAddColumnDialog, setShowAddColumnDialog] = useState(false);
+  const [showAddRowDialog, setShowAddRowDialog] = useState(false);
+  const [editingCell, setEditingCell] = useState<{ row: number; col: string } | null>(null);
+  const [newColumnConfig, setNewColumnConfig] = useState({ name: '', type: 'categorical', formula: '' });
+  const [newRowData, setNewRowData] = useState<Record<string, any>>({});
+  const [editHistory, setEditHistory] = useState<any[]>([]);
+  const [undoStack, setUndoStack] = useState<any[]>([]);
+  const [redoStack, setRedoStack] = useState<any[]>([]);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  
+  // UI states
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'warning' | 'info' });
 
   useEffect(() => {
     fetchDatasets();
@@ -107,6 +131,20 @@ const DataExplorer: React.FC = () => {
       fetchDatasetPreview(selectedDataset);
     }
   }, [selectedDataset]);
+
+  // Real-time filtering effect
+  useEffect(() => {
+    if (previewData.length > 0) {
+      applyFiltersInMemory();
+    }
+  }, [previewData, filters, searchTerm, sortConfig]);
+
+  // Initialize filteredData when previewData changes
+  useEffect(() => {
+    if (previewData.length > 0) {
+      setFilteredData(previewData);
+    }
+  }, [previewData]);
 
   const fetchDatasets = async () => {
     try {
@@ -127,7 +165,7 @@ const DataExplorer: React.FC = () => {
     }
   };
 
-  const fetchDatasetPreview = async (datasetId: string, rows: number = 20) => {
+  const fetchDatasetPreview = async (datasetId: string, rows: number = 100) => {
     try {
       const response = await axios.get(`/dataset/${datasetId}/preview?rows=${rows}`);
       setPreviewData(response.data.preview_data);
@@ -137,11 +175,12 @@ const DataExplorer: React.FC = () => {
   };
 
   const initializeFilters = (dataset: Dataset) => {
-    const initialFilters: FilterConfig[] = dataset.column_names.map(col => ({
+    // Show only first column filter by default
+    const initialFilters: FilterConfig[] = dataset.column_names.map((col, index) => ({
       column: col,
       type: 'equals',
       value: '',
-      enabled: false,
+      enabled: index === 0, // Only first column enabled by default
     }));
     setFilters(initialFilters);
   };
@@ -189,6 +228,221 @@ const DataExplorer: React.FC = () => {
     return stats?.type || 'categorical';
   };
 
+  // Enhanced filtering and data manipulation functions
+  const applyFiltersInMemory = () => {
+    let result = [...previewData];
+    
+    // Apply search term
+    if (searchTerm) {
+      result = result.filter(row => 
+        Object.values(row).some(value => 
+          String(value).toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      );
+    }
+    
+    // Apply filters
+    const activeFilters = filters.filter(f => f.enabled);
+    activeFilters.forEach(filter => {
+      result = result.filter(row => {
+        const value = row[filter.column];
+        switch (filter.type) {
+          case 'equals':
+            return String(value) === String(filter.value);
+          case 'not_equals':
+            return String(value) !== String(filter.value);
+          case 'contains':
+            return String(value).toLowerCase().includes(String(filter.value).toLowerCase());
+          case 'greater_than':
+            return Number(value) > Number(filter.value);
+          case 'less_than':
+            return Number(value) < Number(filter.value);
+          case 'is_null':
+            return value === null || value === undefined || value === '';
+          case 'not_null':
+            return value !== null && value !== undefined && value !== '';
+          default:
+            return true;
+        }
+      });
+    });
+    
+    // Apply sorting
+    if (sortConfig) {
+      result.sort((a, b) => {
+        const aVal = a[sortConfig.column];
+        const bVal = b[sortConfig.column];
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    
+    setFilteredData(result);
+    setPage(0); // Reset to first page when filtering
+  };
+
+  // Get display data based on view mode
+  const getDisplayData = () => {
+    if (showFullTable) {
+      return filteredData;
+    } else {
+      // Show head(5) or tail(5) based on toggle
+      const data = filteredData.length > 0 ? filteredData : previewData;
+      if (showHead) {
+        return data.slice(0, 5);
+      } else {
+        return data.slice(-5);
+      }
+    }
+  };
+
+  const handleSort = (column: string) => {
+    setSortConfig(prev => {
+      if (prev?.column === column) {
+        return { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { column, direction: 'asc' };
+    });
+  };
+
+  const handleRowSelection = (rowIndex: number) => {
+    setSelectedRows(prev => 
+      prev.includes(rowIndex) 
+        ? prev.filter(i => i !== rowIndex)
+        : [...prev, rowIndex]
+    );
+  };
+
+  const handleSelectAllRows = () => {
+    if (selectedRows.length === filteredData.length) {
+      setSelectedRows([]);
+    } else {
+      setSelectedRows(filteredData.map((_, index) => index));
+    }
+  };
+
+  const startCellEdit = (rowIndex: number, col: string) => {
+    setEditingCell({ row: rowIndex, col });
+  };
+
+  const saveCellEdit = (rowIndex: number, col: string, value: any) => {
+    const newData = [...filteredData];
+    newData[rowIndex] = { ...newData[rowIndex], [col]: value };
+    setFilteredData(newData);
+    setEditingCell(null);
+    setHasUnsavedChanges(true);
+    
+    // Add to edit history
+    setEditHistory(prev => [...prev, { row: rowIndex, col, oldValue: previewData[rowIndex][col], newValue: value }]);
+    setUndoStack(prev => [...prev, { row: rowIndex, col, oldValue: previewData[rowIndex][col], newValue: value }]);
+    setRedoStack([]); // Clear redo stack when new edit is made
+  };
+
+  const cancelCellEdit = () => {
+    setEditingCell(null);
+  };
+
+  const addNewColumn = () => {
+    if (!newColumnConfig.name) return;
+    
+    const newData = filteredData.map(row => ({
+      ...row,
+      [newColumnConfig.name]: newColumnConfig.type === 'numeric' ? 0 : ''
+    }));
+    
+    setFilteredData(newData);
+    setShowAddColumnDialog(false);
+    setNewColumnConfig({ name: '', type: 'categorical', formula: '' });
+    setHasUnsavedChanges(true);
+    showSnackbar('Column added successfully', 'success');
+  };
+
+  const addNewRow = () => {
+    const newRow: Record<string, any> = {};
+    datasetInfo?.column_names.forEach(col => {
+      newRow[col] = '';
+    });
+    
+    setFilteredData(prev => [...prev, newRow]);
+    setShowAddRowDialog(false);
+    setNewRowData({});
+    setHasUnsavedChanges(true);
+    showSnackbar('Row added successfully', 'success');
+  };
+
+  const deleteSelectedRows = () => {
+    setFilteredData(prev => prev.filter((_, index) => !selectedRows.includes(index)));
+    setSelectedRows([]);
+    setHasUnsavedChanges(true);
+    showSnackbar('Selected rows deleted', 'success');
+  };
+
+  const duplicateSelectedRows = () => {
+    const rowsToDuplicate = filteredData.filter((_, index) => selectedRows.includes(index));
+    setFilteredData(prev => [...prev, ...rowsToDuplicate]);
+    setHasUnsavedChanges(true);
+    showSnackbar('Selected rows duplicated', 'success');
+  };
+
+  const undoLastEdit = () => {
+    if (undoStack.length === 0) return;
+    
+    const lastEdit = undoStack[undoStack.length - 1];
+    const newData = [...filteredData];
+    newData[lastEdit.row] = { ...newData[lastEdit.row], [lastEdit.col]: lastEdit.oldValue };
+    setFilteredData(newData);
+    
+    setUndoStack(prev => prev.slice(0, -1));
+    setRedoStack(prev => [...prev, lastEdit]);
+    setHasUnsavedChanges(true);
+  };
+
+  const redoLastEdit = () => {
+    if (redoStack.length === 0) return;
+    
+    const lastEdit = redoStack[redoStack.length - 1];
+    const newData = [...filteredData];
+    newData[lastEdit.row] = { ...newData[lastEdit.row], [lastEdit.col]: lastEdit.newValue };
+    setFilteredData(newData);
+    
+    setRedoStack(prev => prev.slice(0, -1));
+    setUndoStack(prev => [...prev, lastEdit]);
+    setHasUnsavedChanges(true);
+  };
+
+  const saveAllChanges = async () => {
+    try {
+      // Here you would typically send the updated data to the backend
+      // For now, we'll just update the local state
+      setPreviewData([...filteredData]);
+      setHasUnsavedChanges(false);
+      showSnackbar('Changes saved successfully', 'success');
+    } catch (error) {
+      showSnackbar('Failed to save changes', 'error');
+    }
+  };
+
+  const showSnackbar = (message: string, severity: 'success' | 'error' | 'warning' | 'info') => {
+    setSnackbar({ open: true, message, severity });
+  };
+
+  const closeSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false });
+  };
+
+  // Pagination helpers
+  const paginatedData = filteredData.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
+  
+  const handleChangePage = (event: unknown, newPage: number) => {
+    setPage(newPage);
+  };
+
+  const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setRowsPerPage(parseInt(event.target.value, 10));
+    setPage(0);
+  };
+
   const addFilter = () => {
     if (datasetInfo) {
       const newFilter: FilterConfig = {
@@ -199,6 +453,13 @@ const DataExplorer: React.FC = () => {
       };
       setFilters(prev => [...prev, newFilter]);
     }
+  };
+
+  const getAvailableColumns = () => {
+    if (!datasetInfo) return [];
+    // Get columns that are not already used in filters
+    const usedColumns = filters.map(f => f.column);
+    return datasetInfo.column_names.filter(col => !usedColumns.includes(col));
   };
 
   const removeFilter = (index: number) => {
@@ -278,8 +539,12 @@ const DataExplorer: React.FC = () => {
       // Clear transformations after successful application
       setTransformations([]);
       
+      // Show success message
+      showSnackbar('Transformations applied successfully!', 'success');
+      
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to apply transformations');
+      showSnackbar('Failed to apply transformations', 'error');
     } finally {
       setLoading(false);
     }
@@ -567,269 +832,399 @@ const DataExplorer: React.FC = () => {
                 Live Data View
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                {/* searchTerm, setSearchTerm, handleSort, sortConfig, filteredData, handleSelectAllRows, selectedRows */}
-                {/* These states and functions are not defined in the original file,
-                    so they are commented out to avoid errors.
-                    If they were intended to be added, they would need to be initialized. */}
-                {/* <TextField
-                  size="small"
-                  placeholder="Search data..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchIcon />
-                      </InputAdornment>
-                    ),
-                  }}
-                  sx={{ width: 250 }}
-                /> */}
-                {/* <Chip 
-                  label={`${filteredData.length} of ${previewData.length} rows`}
-                  color="primary"
-                  variant="outlined"
-                /> */}
-              </Box>
-            </Box>
-
-            {/* previewData is not defined in the original file,
-                so it will be empty and the table will not render.
-                This is a limitation of the provided edit specification. */}
-            {previewData.length > 0 ? (
-              <>
-                <TableContainer component={Paper} sx={{ maxHeight: 600 }}>
-                  <Table stickyHeader size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell padding="checkbox">
-                          {/* <Checkbox
-                            indeterminate={selectedRows.length > 0 && selectedRows.length < filteredData.length}
-                            checked={selectedRows.length === filteredData.length && filteredData.length > 0}
-                            onChange={handleSelectAllRows}
-                          /> */}
-                        </TableCell>
-                        {datasetInfo?.column_names.map(col => (
-                          <TableCell 
-                            key={col}
-                            sx={{ 
-                              cursor: 'pointer',
-                              '&:hover': { backgroundColor: 'action.hover' }
-                            }}
-                            // onClick={() => handleSort(col)}
-                          >
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              {col}
-                              {/* {sortConfig?.column === col && (
-                                <SortIcon 
-                                  sx={{ 
-                                    transform: sortConfig.direction === 'desc' ? 'rotate(180deg)' : 'none',
-                                    fontSize: 16 
-                                  }} 
-                                />
-                              )} */}
-                            </Box>
-                          </TableCell>
-                        ))}
-                        <TableCell>Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {previewData.map((row, rowIndex) => (
-                        <TableRow 
-                          key={rowIndex}
-                          hover
-                          sx={{ 
-                            '&:hover': { backgroundColor: 'action.hover' }
-                          }}
-                        >
-                          <TableCell padding="checkbox">
-                            <Checkbox
-                              checked={false}
-                              onChange={() => {}}
-                            />
-                          </TableCell>
-                          {datasetInfo?.column_names.map(col => (
-                            <TableCell 
-                              key={col}
-                              sx={{ 
-                                cursor: 'pointer',
-                                '&:hover': { backgroundColor: 'action.hover' }
-                              }}
-                            >
-                              <Typography variant="body2" noWrap>
-                                {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
-                              </Typography>
-                            </TableCell>
-                          ))}
-                          <TableCell>
-                            <IconButton
-                              size="small"
-                              onClick={() => {}}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-                
-                <TablePagination
-                  rowsPerPageOptions={[10, 25, 50, 100]}
-                  component="div"
-                  count={previewData.length}
-                  rowsPerPage={25}
-                  page={0}
-                  onPageChange={() => {}}
-                  onRowsPerPageChange={() => {}}
-                  labelRowsPerPage="Rows per page:"
-                  labelDisplayedRows={({ from, to, count }) => `${from}-${to} of ${count}`}
-                />
-              </>
-            ) : (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography variant="body1" color="text.secondary">
-                  No data available. Please select a dataset and upload some data.
-                </Typography>
-              </Box>
-            )}
-          </CardContent>
-        </Card>
-      </Grid>
-
-      {/* Enhanced Filtering Section */}
-      <Grid item xs={12}>
-        <Card>
-          <CardContent>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Typography variant="h6">
-                <FilterIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                Interactive Filters
-              </Typography>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<AddIcon />}
-                onClick={addFilter}
-              >
-                Add Filter
-              </Button>
-            </Box>
-
-            <Box>
-              {filters.map((filter, index) => (
-                <Paper key={index} sx={{ p: 2, mb: 2 }}>
-                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={filter.enabled}
-                          onChange={(e) => updateFilter(index, 'enabled', e.target.checked)}
-                        />
-                      }
-                      label="Enable"
-                    />
-                    
-                    <FormControl size="small" sx={{ minWidth: 150 }}>
-                      <InputLabel>Column</InputLabel>
-                      <Select
-                        value={filter.column}
-                        label="Column"
-                        onChange={(e) => updateFilter(index, 'column', e.target.value)}
-                      >
-                        {datasetInfo?.column_names.map(col => (
-                          <MenuItem key={col} value={col}>{col}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-
-                    <FormControl size="small" sx={{ minWidth: 120 }}>
-                      <InputLabel>Type</InputLabel>
-                      <Select
-                        value={filter.type}
-                        label="Type"
-                        onChange={(e) => updateFilter(index, 'type', e.target.value)}
-                      >
-                        {getFilterTypeOptions(getColumnType(filter.column)).map(option => (
-                          <MenuItem key={option.value} value={option.value}>
-                            {option.label}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-
-                    {renderFilterValueInput(filter)}
-
-                    <IconButton
+                {!showFullTable && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2">View:</Typography>
+                    <Button
+                      variant={showHead ? "contained" : "outlined"}
                       size="small"
-                      color="error"
-                      onClick={() => removeFilter(index)}
+                      onClick={() => setShowHead(true)}
                     >
-                      <RemoveIcon />
-                    </IconButton>
+                      Head(5)
+                    </Button>
+                    <Button
+                      variant={!showHead ? "contained" : "outlined"}
+                      size="small"
+                      onClick={() => setShowHead(false)}
+                    >
+                      Tail(5)
+                    </Button>
                   </Box>
-                </Paper>
-              ))}
+                )}
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={showFullTable}
+                      onChange={(e) => setShowFullTable(e.target.checked)}
+                    />
+                  }
+                  label="Full Table View"
+                />
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<UndoIcon />}
+                  onClick={undoLastEdit}
+                  disabled={undoStack.length === 0}
+                  title="Undo last edit"
+                >
+                  Undo
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<RedoIcon />}
+                  onClick={redoLastEdit}
+                  disabled={redoStack.length === 0}
+                  title="Redo last edit"
+                >
+                  Redo
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<RefreshIcon />}
+                  onClick={() => fetchDatasetPreview(selectedDataset)}
+                  disabled={!selectedDataset || loading}
+                >
+                  Refresh
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<SaveAltIcon />}
+                  onClick={() => {}}
+                  disabled={!selectedDataset}
+                >
+                  Export
+                </Button>
+                {hasUnsavedChanges && (
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<SaveIcon />}
+                    onClick={saveAllChanges}
+                    color="primary"
+                  >
+                    Save Changes
+                  </Button>
+                )}
+              </Box>
             </Box>
-          </CardContent>
-        </Card>
-      </Grid>
 
-      {/* Data Manipulation Tools */}
-      <Grid item xs={12}>
-        <Card>
-          <CardContent>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Typography variant="h6">
-                <TransformIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                Data Manipulation Tools
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                {/* showAddRowDialog, setShowAddRowDialog, newRowData, setNewRowData, addNewRow */}
-                {/* These states and functions are not defined in the original file,
-                    so they are commented out to avoid errors.
-                    If they were intended to be added, they would need to be initialized. */}
-                {/* <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<AddRowIcon />}
-                  onClick={() => setShowAddRowDialog(true)}
-                >
-                  Add Row
-                </Button> */}
-                {/* <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<AddColumnIcon />}
-                  onClick={() => setShowAddColumnDialog(true)}
-                >
-                  Add Column
-                </Button> */}
-                {/* <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<CopyIcon />}
-                  onClick={duplicateSelectedRows}
-                  disabled={selectedRows.length === 0}
-                >
-                  Duplicate Rows
-                </Button> */}
-                {/* <Button
-                  variant="contained"
-                  size="small"
-                  color="error"
-                  onClick={deleteSelectedRows}
-                  disabled={selectedRows.length === 0}
-                >
-                  Delete Selected Rows
-                </Button> */}
+                         {/* Search and Quick Actions */}
+             <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+               <TextField
+                 size="small"
+                 placeholder="Search in all columns..."
+                 value={searchTerm}
+                 onChange={(e) => setSearchTerm(e.target.value)}
+                 InputProps={{
+                   startAdornment: (
+                     <InputAdornment position="start">
+                       <SearchIcon />
+                     </InputAdornment>
+                   ),
+                 }}
+                 sx={{ minWidth: 300 }}
+               />
+               
+               {/* Status Indicators */}
+               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                 <Chip 
+                   label={`${getDisplayData().length} of ${previewData.length} rows`}
+                   color="primary"
+                   variant="outlined"
+                   size="small"
+                 />
+                 {!showFullTable && (
+                   <Chip 
+                     label={showHead ? "Head(5)" : "Tail(5)"}
+                     color="secondary"
+                     variant="outlined"
+                     size="small"
+                   />
+                 )}
+                 {hasUnsavedChanges && (
+                   <Chip 
+                     label="Unsaved Changes"
+                     color="warning"
+                     variant="filled"
+                     size="small"
+                   />
+                 )}
+               </Box>
+             </Box>
+
+            {/* Side by Side Layout: Filters + Table */}
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              {/* Filters Panel - Narrow Space */}
+              <Box sx={{ width: 320, flexShrink: 0 }}>
+                <Paper sx={{ p: 2, height: 'fit-content' }}>
+                  <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
+                    <FilterIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                    Quick Filters
+                  </Typography>
+                  
+                                     {/* Show only first few filters by default */}
+                   {filters.slice(0, showFullTable ? filters.length : 3).map((filter, index) => (
+                     <Box key={index} sx={{ mb: 2, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                         <FormControlLabel
+                           control={
+                             <Switch
+                               size="small"
+                               checked={filter.enabled}
+                               onChange={(e) => updateFilter(index, 'enabled', e.target.checked)}
+                             />
+                           }
+                           label=""
+                         />
+                         <FormControl size="small" sx={{ minWidth: 120, flexGrow: 1 }}>
+                           <Select
+                             value={filter.column}
+                             onChange={(e) => updateFilter(index, 'column', e.target.value)}
+                             size="small"
+                           >
+                             {datasetInfo?.column_names.map(col => (
+                               <MenuItem key={col} value={col}>{col}</MenuItem>
+                             ))}
+                           </Select>
+                         </FormControl>
+                         <IconButton
+                           size="small"
+                           color="error"
+                           onClick={() => removeFilter(index)}
+                         >
+                           <RemoveIcon fontSize="small" />
+                         </IconButton>
+                       </Box>
+                       
+                       {filter.enabled && (
+                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                           <FormControl size="small">
+                             <Select
+                               value={filter.type}
+                               onChange={(e) => updateFilter(index, 'type', e.target.value)}
+                               size="small"
+                             >
+                               {getFilterTypeOptions(getColumnType(filter.column)).map(option => (
+                                 <MenuItem key={option.value} value={option.value}>
+                                   {option.label}
+                                 </MenuItem>
+                               ))}
+                             </Select>
+                           </FormControl>
+                           {renderFilterValueInput(filter)}
+                         </Box>
+                       )}
+                     </Box>
+                   ))}
+                  
+                  {!showFullTable && filters.length > 3 && (
+                    <Button
+                      variant="text"
+                      size="small"
+                      startIcon={<AddIcon />}
+                      onClick={() => setShowFullTable(true)}
+                      sx={{ mt: 1 }}
+                    >
+                      Show More Filters ({filters.length - 3} hidden)
+                    </Button>
+                  )}
+                  
+                                                        <Button
+                     variant="outlined"
+                     size="small"
+                     startIcon={<AddIcon />}
+                     onClick={addFilter}
+                     fullWidth
+                     disabled={getAvailableColumns().length === 0}
+                     sx={{ mt: 1 }}
+                   >
+                     Add Filter ({getAvailableColumns().length} available)
+                   </Button>
+
+                   {/* Data Manipulation Buttons */}
+                   <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                     <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
+                       Data Actions
+                     </Typography>
+                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                       <Button
+                         variant="outlined"
+                         size="small"
+                         startIcon={<AddRowIcon />}
+                         onClick={() => setShowAddRowDialog(true)}
+                         disabled={!selectedDataset}
+                         fullWidth
+                       >
+                         Add Row
+                       </Button>
+                       <Button
+                         variant="outlined"
+                         size="small"
+                         startIcon={<AddColumnIcon />}
+                         onClick={() => setShowAddColumnDialog(true)}
+                         disabled={!selectedDataset}
+                         fullWidth
+                       >
+                         Add Column
+                       </Button>
+                       <Button
+                         variant="outlined"
+                         size="small"
+                         startIcon={<CopyIcon />}
+                         onClick={duplicateSelectedRows}
+                         disabled={selectedRows.length === 0}
+                         fullWidth
+                       >
+                         Duplicate
+                       </Button>
+                       <Button
+                         variant="contained"
+                         size="small"
+                         color="error"
+                         onClick={deleteSelectedRows}
+                         disabled={selectedRows.length === 0}
+                         fullWidth
+                       >
+                         Delete
+                       </Button>
+                     </Box>
+                   </Box>
+                 </Paper>
+               </Box>
+
+              {/* Data Table - Main Space */}
+              <Box sx={{ flexGrow: 1 }}>
+                {filteredData.length > 0 ? (
+                  <>
+                    <TableContainer component={Paper} sx={{ maxHeight: 600 }}>
+                      <Table stickyHeader size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell padding="checkbox">
+                              <Checkbox
+                                indeterminate={selectedRows.length > 0 && selectedRows.length < filteredData.length}
+                                checked={selectedRows.length === filteredData.length && filteredData.length > 0}
+                                onChange={handleSelectAllRows}
+                              />
+                            </TableCell>
+                            {datasetInfo?.column_names.map(col => (
+                              <TableCell 
+                                key={col}
+                                sx={{ 
+                                  cursor: 'pointer',
+                                  '&:hover': { backgroundColor: 'action.hover' }
+                                }}
+                                onClick={() => handleSort(col)}
+                              >
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  {col}
+                                  {sortConfig?.column === col && (
+                                    <SortIcon 
+                                      sx={{ 
+                                        transform: sortConfig.direction === 'desc' ? 'rotate(180deg)' : 'none',
+                                        fontSize: 16 
+                                      }} 
+                                    />
+                                  )}
+                                </Box>
+                              </TableCell>
+                            ))}
+                            <TableCell>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                                                 <TableBody>
+                           {getDisplayData().map((row, rowIndex) => (
+                             <TableRow 
+                               key={rowIndex}
+                               hover
+                               selected={selectedRows.includes(rowIndex)}
+                               sx={{ 
+                                 '&:hover': { backgroundColor: 'action.hover' }
+                               }}
+                             >
+                               <TableCell padding="checkbox">
+                                 <Checkbox
+                                   checked={selectedRows.includes(rowIndex)}
+                                   onChange={() => handleRowSelection(rowIndex)}
+                                 />
+                               </TableCell>
+                               {datasetInfo?.column_names.map(col => (
+                                 <TableCell 
+                                   key={col}
+                                   sx={{ 
+                                     cursor: 'pointer',
+                                     '&:hover': { backgroundColor: 'action.hover' }
+                                   }}
+                                   onClick={() => startCellEdit(rowIndex, col)}
+                                 >
+                                   {editingCell?.row === rowIndex && editingCell?.col === col ? (
+                                     <TextField
+                                       size="small"
+                                       value={row[col] || ''}
+                                       onChange={(e) => saveCellEdit(rowIndex, col, e.target.value)}
+                                       onBlur={cancelCellEdit}
+                                       onKeyPress={(e) => e.key === 'Enter' && saveCellEdit(rowIndex, col, (e.target as HTMLInputElement).value)}
+                                       autoFocus
+                                       fullWidth
+                                     />
+                                   ) : (
+                                     <Typography variant="body2" noWrap>
+                                       {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
+                                     </Typography>
+                                   )}
+                                 </TableCell>
+                               ))}
+                               <TableCell>
+                                 <IconButton
+                                   size="small"
+                                   onClick={() => startCellEdit(rowIndex, datasetInfo?.column_names[0] || '')}
+                                 >
+                                   <EditIcon fontSize="small" />
+                                 </IconButton>
+                               </TableCell>
+                             </TableRow>
+                           ))}
+                         </TableBody>
+                      </Table>
+                    </TableContainer>
+                    
+                                         {showFullTable && (
+                       <TablePagination
+                         rowsPerPageOptions={[10, 25, 50, 100]}
+                         component="div"
+                         count={filteredData.length}
+                         rowsPerPage={rowsPerPage}
+                         page={page}
+                         onPageChange={handleChangePage}
+                         onRowsPerPageChange={handleChangeRowsPerPage}
+                         labelRowsPerPage="Rows per page:"
+                         labelDisplayedRows={({ from, to, count }) => `${from}-${to} of ${count}`}
+                       />
+                     )}
+                  </>
+                ) : (
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <Typography variant="body1" color="text.secondary">
+                      {previewData.length === 0 
+                        ? 'No data available. Please select a dataset and upload some data.'
+                        : 'No data matches the current filters. Try adjusting your filter criteria.'
+                      }
+                    </Typography>
+                  </Box>
+                )}
               </Box>
             </Box>
           </CardContent>
         </Card>
       </Grid>
+
+      {/* Enhanced Filtering Section - Moved to side-by-side layout above */}
+
+      {/* Data Manipulation Tools - Moved to main view above */}
 
       {/* Data Transformations */}
       <Grid item xs={12}>
@@ -918,11 +1313,7 @@ const DataExplorer: React.FC = () => {
 
       {/* Dialogs */}
       {/* Add Column Dialog */}
-      {/* showAddColumnDialog, setShowAddColumnDialog, newColumnConfig, setNewColumnConfig, addNewColumn */}
-      {/* These states and functions are not defined in the original file,
-          so they are commented out to avoid errors.
-          If they were intended to be added, they would need to be initialized. */}
-      {/* <Dialog open={showAddColumnDialog} onClose={() => setShowAddColumnDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog open={showAddColumnDialog} onClose={() => setShowAddColumnDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add New Column</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -963,14 +1354,10 @@ const DataExplorer: React.FC = () => {
             Add Column
           </Button>
         </DialogActions>
-      </Dialog> */}
+      </Dialog>
 
       {/* Add Row Dialog */}
-      {/* showAddRowDialog, setShowAddRowDialog, newRowData, setNewRowData, addNewRow */}
-      {/* These states and functions are not defined in the original file,
-          so they are commented out to avoid errors.
-          If they were intended to be added, they would need to be initialized. */}
-      {/* <Dialog open={showAddRowDialog} onClose={() => setShowAddRowDialog(false)} maxWidth="md" fullWidth>
+      <Dialog open={showAddRowDialog} onClose={() => setShowAddRowDialog(false)} maxWidth="md" fullWidth>
         <DialogTitle>Add New Row</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
@@ -991,14 +1378,10 @@ const DataExplorer: React.FC = () => {
             Add Row
           </Button>
         </DialogActions>
-      </Dialog> */}
+      </Dialog>
 
       {/* Snackbar for notifications */}
-      {/* snackbar */}
-      {/* These state and function are not defined in the original file,
-          so they are commented out to avoid errors.
-          If they were intended to be added, they would need to be initialized. */}
-      {/* <Snackbar
+      <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={closeSnackbar}
@@ -1007,7 +1390,7 @@ const DataExplorer: React.FC = () => {
         <Alert onClose={closeSnackbar} severity={snackbar.severity} sx={{ width: '100%' }}>
           {snackbar.message}
         </Alert>
-      </Snackbar> */}
+      </Snackbar>
     </Box>
   );
 };

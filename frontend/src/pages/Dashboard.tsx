@@ -98,23 +98,26 @@ const Dashboard: React.FC = () => {
     {
       title: 'Upload Data',
       description: 'Import CSV, Excel, or text files',
-      icon: <UploadIcon sx={{ fontSize: 40, color: 'primary.main' }} />,
+      icon: <UploadIcon />,
       action: () => navigate('/upload'),
-      color: 'primary',
+      gradient: 'linear-gradient(135deg, #1f4e79 0%, #4a7ba7 100%)',
+      stats: `${datasets.length} datasets`,
     },
     {
       title: 'Explore Data',
       description: 'Filter, transform, and analyze datasets',
-      icon: <ExploreIcon sx={{ fontSize: 40, color: 'secondary.main' }} />,
+      icon: <ExploreIcon />,
       action: () => navigate('/explorer'),
-      color: 'secondary',
+      gradient: 'linear-gradient(135deg, #00a86b 0%, #4dd4a3 100%)',
+      stats: `${stats?.total_rows || 0} rows`,
     },
     {
       title: 'Create Visualizations',
       description: 'Build interactive charts and plots',
-      icon: <ChartIcon sx={{ fontSize: 40, color: 'success.main' }} />,
+      icon: <ChartIcon />,
       action: () => navigate('/visualization'),
-      color: 'success',
+      gradient: 'linear-gradient(135deg, #ff9800 0%, #ffb74d 100%)',
+      stats: 'Interactive charts',
     },
   ];
 
@@ -128,18 +131,145 @@ const Dashboard: React.FC = () => {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">
-          Dashboard
+      {/* Welcome Section */}
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h3" sx={{ 
+          fontWeight: 700, 
+          background: 'linear-gradient(135deg, #1f4e79 0%, #00a86b 100%)',
+          backgroundClip: 'text',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          mb: 1,
+        }}>
+          Welcome to DataViz Platform
         </Typography>
-        <Button
-          variant="outlined"
-          startIcon={<RefreshIcon />}
-          onClick={fetchDatasets}
-        >
-          Refresh
-        </Button>
+        <Typography variant="h6" sx={{ color: 'text.secondary', fontWeight: 400 }}>
+          Transform your data into actionable insights with professional visualization tools
+        </Typography>
       </Box>
+
+      {/* Stats Overview */}
+      {stats && (
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ 
+              background: 'linear-gradient(135deg, #1f4e79 0%, #4a7ba7 100%)',
+              color: 'white',
+              position: 'relative',
+              overflow: 'hidden',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: '100px',
+                height: '100px',
+                background: 'rgba(255,255,255,0.1)',
+                borderRadius: '50%',
+                transform: 'translate(30px, -30px)',
+              },
+            }}>
+              <CardContent>
+                <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                  {stats.total_datasets}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                  Total Datasets
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ 
+              background: 'linear-gradient(135deg, #00a86b 0%, #4dd4a3 100%)',
+              color: 'white',
+              position: 'relative',
+              overflow: 'hidden',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: '100px',
+                height: '100px',
+                background: 'rgba(255,255,255,0.1)',
+                borderRadius: '50%',
+                transform: 'translate(30px, -30px)',
+              },
+            }}>
+              <CardContent>
+                <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                  {stats.total_rows.toLocaleString()}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                  Total Rows
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ 
+              background: 'linear-gradient(135deg, #ff9800 0%, #ffb74d 100%)',
+              color: 'white',
+              position: 'relative',
+              overflow: 'hidden',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: '100px',
+                height: '100px',
+                background: 'rgba(255,255,255,0.1)',
+                borderRadius: '50%',
+                transform: 'translate(30px, -30px)',
+              },
+            }}>
+              <CardContent>
+                <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                  {stats.total_columns}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                  Total Columns
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ 
+              background: 'linear-gradient(135deg, #9c27b0 0%, #ba68c8 100%)',
+              color: 'white',
+              position: 'relative',
+              overflow: 'hidden',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: '100px',
+                height: '100px',
+                background: 'rgba(255,255,255,0.1)',
+                borderRadius: '50%',
+                transform: 'translate(30px, -30px)',
+              },
+            }}>
+              <CardContent>
+                <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                  {stats.total_size_mb} MB
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                  Data Size
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      )}
+
+      {/* Quick Actions */}
+      <Typography variant="h5" sx={{ fontWeight: 600, mb: 3, color: 'text.primary' }}>
+        Quick Actions
+      </Typography>
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
@@ -201,40 +331,86 @@ const Dashboard: React.FC = () => {
         </Grid>
       )}
 
-      {/* Quick Actions */}
-      <Typography variant="h5" gutterBottom sx={{ mb: 2 }}>
-        Quick Actions
-      </Typography>
       <Grid container spacing={3} sx={{ mb: 4 }}>
         {getQuickActionCards().map((card, index) => (
           <Grid item xs={12} md={4} key={index}>
-            <Card 
-              sx={{ 
+            <Card
+              sx={{
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
+                transition: 'all 0.3s ease',
+                position: 'relative',
+                overflow: 'hidden',
                 '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: theme.shadows[8],
+                  transform: 'translateY(-8px)',
+                  boxShadow: '0 20px 25px rgba(0, 0, 0, 0.15)',
+                  '& .card-icon': {
+                    transform: 'scale(1.1)',
+                  },
                 },
               }}
               onClick={card.action}
             >
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                {card.icon}
-                <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>
-                  {card.title}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {card.description}
-                </Typography>
+              <CardContent sx={{ p: 3, position: 'relative', zIndex: 1 }}>
+                <Box sx={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 2, 
+                  mb: 2,
+                }}>
+                  <Box
+                    sx={{
+                      width: 60,
+                      height: 60,
+                      borderRadius: 3,
+                      background: card.gradient,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      transition: 'transform 0.3s ease',
+                    }}
+                    className="card-icon"
+                  >
+                    {card.icon}
+                  </Box>
+                  <Box sx={{ flex: 1 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+                      {card.title}
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
+                      {card.description}
+                    </Typography>
+                    <Chip 
+                      label={card.stats} 
+                      size="small" 
+                      sx={{ 
+                        backgroundColor: 'rgba(31, 78, 121, 0.1)',
+                        color: 'primary.main',
+                        fontWeight: 500,
+                      }} 
+                    />
+                  </Box>
+                </Box>
               </CardContent>
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: 0,
+                  right: 0,
+                  width: '100px',
+                  height: '100px',
+                  background: 'rgba(255,255,255,0.05)',
+                  borderRadius: '50%',
+                  transform: 'translate(30px, -30px)',
+                }}
+              />
             </Card>
           </Grid>
         ))}
       </Grid>
 
       {/* Recent Datasets */}
-      <Typography variant="h5" gutterBottom sx={{ mb: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 600, mb: 3, color: 'text.primary' }}>
         Recent Datasets
       </Typography>
       

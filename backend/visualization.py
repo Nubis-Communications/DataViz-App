@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, Body, Response
-from typing import Dict, List, Any, Optional
+from fastapi import APIRouter, HTTPException, Body, Response, Query
+from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 try:
@@ -448,3 +448,119 @@ def apply_chart_customizations(fig: go.Figure, customizations: Dict[str, Any]):
     # Show/hide labels
     if not customizations.get("showLabels", False):
         fig.update_traces(textposition="none")
+
+
+# ------------------ JSON-ONLY PLOT ENDPOINTS (front-end renders) ------------------
+
+def _downsample_xy(x: List[Any], y: List[Any], sample: Optional[int]) -> Tuple[List[Any], List[Any]]:
+    if sample is None or sample <= 0 or len(x) <= sample:
+        return x, y
+    # simple uniform sampling
+    step = max(1, len(x) // sample)
+    xs = x[::step][:sample]
+    ys = y[::step][:sample]
+    return xs, ys
+
+def _basic_stats(values: List[float]) -> Dict[str, Any]:
+    arr = np.array([v for v in values if v is not None and not (isinstance(v, float) and np.isnan(v))], dtype=float)
+    if arr.size == 0:
+        return {"mean": None, "std": None, "min": None, "max": None, "n": 0}
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0,
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+        "n": int(arr.size),
+    }
+
+@router.get("/{dataset_id}/json_scatter")
+async def json_scatter(
+    dataset_id: str,
+    x: str = Query(..., description="X column name"),
+    y: str = Query(..., description="Y column name"),
+    sample: Optional[int] = Query(None, description="Optional down-sample size")
+):
+    """Return raw x/y arrays and basic stats for client-side rendering."""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    df = datasets[dataset_id].df
+    if x not in df.columns or y not in df.columns:
+        raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
+
+    x_vals = df[x].tolist()
+    y_vals = df[y].tolist()
+
+    # convert non-numeric y gracefully where possible
+    try:
+        y_numeric = pd.to_numeric(df[y], errors='coerce').tolist()
+    except Exception:
+        y_numeric = y_vals
+
+    x_vals, y_numeric = _downsample_xy(x_vals, y_numeric, sample)
+
+    return {
+        "x": x_vals,
+        "y": y_numeric,
+        "x_label": x,
+        "y_label": y,
+        "stats": _basic_stats([v for v in y_numeric if v is not None]),
+    }
+
+@router.get("/{dataset_id}/json_series")
+async def json_series(
+    dataset_id: str,
+    column: str = Query(..., description="Numeric column name"),
+    sample: Optional[int] = Query(None)
+):
+    """Return index as x and column values as y for a simple series plot."""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    df = datasets[dataset_id].df
+    if column not in df.columns:
+        raise HTTPException(status_code=400, detail=f"Column not found. Available: {list(df.columns)}")
+
+    y_vals = pd.to_numeric(df[column], errors='coerce').tolist()
+    x_vals = list(range(len(y_vals)))
+
+    x_vals, y_vals = _downsample_xy(x_vals, y_vals, sample)
+
+    return {
+        "x": x_vals,
+        "y": y_vals,
+        "x_label": "index",
+        "y_label": column,
+        "stats": _basic_stats([v for v in y_vals if v is not None]),
+    }
+
+@router.get("/{dataset_id}/json_bar")
+async def json_bar(
+    dataset_id: str,
+    category: str = Query(...),
+    value: str = Query(...),
+    agg: str = Query("mean", description="Aggregation: mean|sum|count")
+):
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    df = datasets[dataset_id].df
+    if category not in df.columns or value not in df.columns:
+        raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
+
+    if agg == "mean":
+        agg_df = df.groupby(category)[value].mean().reset_index()
+    elif agg == "sum":
+        agg_df = df.groupby(category)[value].sum().reset_index()
+    elif agg == "count":
+        agg_df = df.groupby(category)[value].count().reset_index()
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported aggregation")
+
+    return {
+        "x": agg_df[category].astype(str).tolist(),
+        "y": pd.to_numeric(agg_df[value], errors='coerce').tolist(),
+        "x_label": category,
+        "y_label": f"{agg}({value})",
+        "stats": _basic_stats(pd.to_numeric(agg_df[value], errors='coerce').tolist()),
+    }

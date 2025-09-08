@@ -69,13 +69,12 @@ cd ..
 :: Install frontend dependencies
 echo Installing frontend dependencies...
 cd frontend
-if not exist "node_modules" (
-    npm install
-    if errorlevel 1 (
-        echo ERROR: Failed to install frontend dependencies
-        pause
-        exit /b 1
-    )
+echo Running npm install to ensure latest dependencies...
+npm install --no-audit --no-fund
+if errorlevel 1 (
+    echo ERROR: Failed to install frontend dependencies
+    pause
+    exit /b 1
 )
 cd ..
 
@@ -137,3 +136,4 @@ echo.
 echo Note: User capacity is flexible and depends on server resources
 echo.
 pause
+

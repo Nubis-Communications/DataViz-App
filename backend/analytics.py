@@ -476,3 +476,4 @@ def generate_analysis_html(analysis: Dict[str, Any]) -> str:
     """
     
     return html_content
+

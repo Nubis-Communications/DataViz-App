@@ -100,7 +100,7 @@ interface ChartCustomizations {
 
 interface PlotData {
   chartId: string;
-  data: any;
+  json: { x?: any[]; y?: any[]; labels?: any[]; values?: any[]; x_label?: string; y_label?: string; stats?: any };
   config: ChartConfig;
   timestamp: number;
 }
@@ -182,9 +182,11 @@ const DataVisualizer: React.FC = () => {
   // Render charts when plotData changes
   useEffect(() => {
     plotData.forEach(plot => {
-      if (plot.data && plot.data.data && plot.data.layout) {
+      const chart = charts.find(c => c.id === plot.chartId);
+      if (!chart) return;
+      if (plot.json && (plot.json.x || plot.json.labels)) {
         setTimeout(() => {
-          renderChartToDOM(plot.chartId, plot.data);
+          renderChartToDOM(plot.chartId, chart, plot.json);
         }, 100);
       }
     });
@@ -277,17 +279,20 @@ const DataVisualizer: React.FC = () => {
       setLoading(true);
       setError(null);
       
-      console.log('Generating chart with config:', chart);
-      
-      // Generate plot using backend - send only the chart config
-      const response = await axios.post(`/visualize/${selectedDataset}/generate`, chart);
+      console.log('Generating JSON chart with config:', chart);
+      let response;
+      if (chart.type === 'bar') {
+        const params = new URLSearchParams({ category: chart.xAxis || '', value: chart.yAxis || '', agg: chart.aggregation || 'mean' });
+        response = await axios.get(`/visualize/${selectedDataset}/json_bar?${params.toString()}`);
+      } else {
+        // default to scatter-style JSON
+        const params = new URLSearchParams({ x: chart.xAxis || '', y: chart.yAxis || '', sample: '1000' });
+        response = await axios.get(`/visualize/${selectedDataset}/json_scatter?${params.toString()}`);
+      }
 
-      console.log('Backend response:', response.data);
-
-      // Update plot data
       const newPlot: PlotData = {
         chartId: chart.id,
-        data: response.data.plot_data,
+        json: response.data,
         config: chart,
         timestamp: Date.now()
       };
@@ -316,22 +321,22 @@ const DataVisualizer: React.FC = () => {
       setLoading(true);
       setError(null);
       
-      console.log('Generating test chart...');
-      
-      const response = await axios.post(`/visualize/${selectedDataset}/test`);
+      console.log('Generating test JSON chart...');
+      // Choose first two numeric columns if available
+      const x = datasetInfo?.column_names[0] || '';
+      const y = getNumericColumns()[0] || '';
+      const params = new URLSearchParams({ x, y, sample: '200' });
+      const response = await axios.get(`/visualize/${selectedDataset}/json_scatter?${params.toString()}`);
 
-      console.log('Test chart response:', response.data);
-
-      // Update plot data with test chart
       const newPlot: PlotData = {
         chartId: 'test_chart',
-        data: response.data.plot_data,
+        json: response.data,
         config: {
           id: 'test_chart',
           type: 'scatter',
           title: 'Test Chart',
-          xAxis: response.data.test_info.x_column,
-          yAxis: response.data.test_info.y_column,
+          xAxis: x,
+          yAxis: y,
           customizations: {
             theme: 'plotly_white',
             colorPalette: 'default',
@@ -365,7 +370,7 @@ const DataVisualizer: React.FC = () => {
     }
   };
 
-  const renderChartToDOM = (chartId: string, plotData: any) => {
+  const renderChartToDOM = (chartId: string, chart: ChartConfig, json: any) => {
     if (!window.Plotly) {
       console.error('Plotly not available');
       return;
@@ -378,17 +383,36 @@ const DataVisualizer: React.FC = () => {
     }
 
     try {
-      console.log(`Rendering chart ${chartId} with data:`, plotData);
-      
-      // Clear the container
+      console.log(`Rendering chart ${chartId} (type=${chart.type}) with JSON:`, json);
+
+      const type = chart.type;
+      let data: any[] = [];
+      if (type === 'bar') {
+        data = [{ x: json.x, y: json.y, type: 'bar', name: chart.title }];
+      } else if (type === 'line') {
+        data = [{ x: json.x, y: json.y, type: 'scatter', mode: 'lines+markers', name: chart.title }];
+      } else if (type === 'pie') {
+        data = [{ labels: json.labels || json.x, values: json.values || json.y, type: 'pie', name: chart.title }];
+      } else {
+        // default scatter
+        data = [{ x: json.x, y: json.y, type: 'scatter', mode: 'markers', name: chart.title }];
+      }
+
+      const layout: any = {
+        title: chart.title,
+        xaxis: { title: json.x_label || chart.xAxis },
+        yaxis: { title: json.y_label || chart.yAxis },
+        template: chart.customizations.theme,
+        width: chart.customizations.width,
+        height: chart.customizations.height
+      };
+
       chartContainer.innerHTML = '';
-      
-      // Create the chart
-      window.Plotly.newPlot(chartContainer, plotData.data, plotData.layout, {
-        responsive: true,
-        displayModeBar: true,
-        modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
-        displaylogo: false
+      window.Plotly.newPlot(chartContainer, data, layout, {
+          responsive: true,
+          displayModeBar: true,
+          modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+          displaylogo: false
       });
       
       console.log(`Chart ${chartId} rendered successfully`);
@@ -457,7 +481,7 @@ const DataVisualizer: React.FC = () => {
       );
     }
 
-    // Render the chart container
+    // Render container for imperative Plotly rendering
     return (
       <Box sx={{ 
         height: chart.customizations.height,
@@ -551,6 +575,31 @@ const DataVisualizer: React.FC = () => {
                 sx={{ mt: 2 }}
               >
                 Add New Chart
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<RefreshIcon />}
+                onClick={async () => {
+                  try {
+                    const csv = 'time,signal\n1,10\n2,15\n3,13\n4,20\n5,18\n6,25\n7,23\n8,30\n9,28\n10,35\n';
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const file = new File([blob], 'dummy_dataset.csv', { type: 'text/csv' });
+                    const form = new FormData();
+                    form.append('file', file);
+                    const res = await axios.post('/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+                    const id = res.data.dataset_id as string;
+                    await fetchDatasets();
+                    setSelectedDataset(id);
+                    showSnackbar('Dummy dataset uploaded', 'success');
+                  } catch (e) {
+                    console.error(e);
+                    showSnackbar('Failed to upload dummy dataset', 'error');
+                  }
+                }}
+                fullWidth
+                sx={{ mt: 1 }}
+              >
+                Load Dummy Dataset
               </Button>
               <Button
                 variant="contained"
@@ -661,7 +710,7 @@ const DataVisualizer: React.FC = () => {
                         <FormControl fullWidth>
                           <InputLabel>Y-Axis</InputLabel>
                           <Select
-                            value={chart.xAxis}
+                            value={chart.yAxis}
                             label="Y-Axis"
                             onChange={(e) => updateChart(chart.id, { yAxis: e.target.value as string })}
                             fullWidth

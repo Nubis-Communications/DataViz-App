@@ -461,6 +461,31 @@ def _downsample_xy(x: List[Any], y: List[Any], sample: Optional[int]) -> Tuple[L
     ys = y[::step][:sample]
     return xs, ys
 
+def _downsample_columns(cols: List[List[Any]], sample: Optional[int]) -> List[List[Any]]:
+    if not cols:
+        return cols
+    length = len(cols[0])
+    if sample is None or sample <= 0 or length <= sample:
+        return cols
+    step = max(1, length // sample)
+    indices = list(range(0, length, step))[:sample]
+    return [[col[i] for i in indices] for col in cols]
+
+def _nan_to_none(value: Any) -> Any:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
+            return None
+        return value
+    except Exception:
+        return value
+
+def _sanitize_list(values: Optional[List[Any]]) -> Optional[List[Any]]:
+    if values is None:
+        return None
+    return [ _nan_to_none(v) for v in values ]
+
 def _basic_stats(values: List[float]) -> Dict[str, Any]:
     arr = np.array([v for v in values if v is not None and not (isinstance(v, float) and np.isnan(v))], dtype=float)
     if arr.size == 0:
@@ -478,7 +503,10 @@ async def json_scatter(
     dataset_id: str,
     x: str = Query(..., description="X column name"),
     y: str = Query(..., description="Y column name"),
-    sample: Optional[int] = Query(None, description="Optional down-sample size")
+    sample: Optional[int] = Query(None, description="Optional down-sample size"),
+    group: Optional[str] = Query(None, description="Optional categorical column to group by for facets"),
+    color: Optional[str] = Query(None, description="Optional column to use for marker color (numeric preferred)"),
+    size: Optional[str] = Query(None, description="Optional column to use for marker size (numeric preferred)")
 ):
     """Return raw x/y arrays and basic stats for client-side rendering."""
     if dataset_id not in datasets:
@@ -488,24 +516,83 @@ async def json_scatter(
     if x not in df.columns or y not in df.columns:
         raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
 
-    x_vals = df[x].tolist()
-    y_vals = df[y].tolist()
+    warnings: List[str] = []
 
-    # convert non-numeric y gracefully where possible
-    try:
-        y_numeric = pd.to_numeric(df[y], errors='coerce').tolist()
-    except Exception:
-        y_numeric = y_vals
+    def cast_numeric(series_name: Optional[str]) -> Optional[List[Optional[float]]]:
+        if not series_name or series_name not in df.columns:
+            return None
+        s = pd.to_numeric(df[series_name], errors='coerce')
+        nan_count = int(s.isna().sum())
+        if nan_count > 0:
+            warnings.append(f"Column '{series_name}' had {nan_count} non-numeric values; coerced to NaN")
+        return s.tolist()
 
-    x_vals, y_numeric = _downsample_xy(x_vals, y_numeric, sample)
-
-    return {
-        "x": x_vals,
-        "y": y_numeric,
-        "x_label": x,
-        "y_label": y,
-        "stats": _basic_stats([v for v in y_numeric if v is not None]),
-    }
+    if group and group in df.columns:
+        groups_out = []
+        for g, gdf in df.groupby(group):
+            x_vals = gdf[x].tolist()
+            try:
+                y_numeric = pd.to_numeric(gdf[y], errors='coerce').tolist()
+            except Exception:
+                y_numeric = gdf[y].tolist()
+            c_vals = cast_numeric(color) if color else None
+            s_vals = cast_numeric(size) if size else None
+            if c_vals is not None:
+                c_vals = [c for idx, c in zip(gdf.index, c_vals) if idx in gdf.index]
+            if s_vals is not None:
+                s_vals = [s for idx, s in zip(gdf.index, s_vals) if idx in gdf.index]
+            cols = [x_vals, y_numeric]
+            if c_vals is not None:
+                cols.append(c_vals)
+            if s_vals is not None:
+                cols.append(s_vals)
+            ds_cols = _downsample_columns(cols, sample)
+            x_s, y_s = ds_cols[0], ds_cols[1]
+            c_s = ds_cols[2] if (c_vals is not None and len(ds_cols) > 2) else None
+            s_s = ds_cols[3] if (s_vals is not None and len(ds_cols) > 3) else None
+            groups_out.append({
+                "name": str(g),
+                "x": _sanitize_list(x_s),
+                "y": _sanitize_list(y_s),
+                "color": _sanitize_list(c_s),
+                "size": _sanitize_list(s_s),
+                "stats": _basic_stats([v for v in y_s if v is not None])
+            })
+        return {
+            "groups": groups_out,
+            "x_label": x,
+            "y_label": y,
+            "group_label": group,
+            "warnings": warnings
+        }
+    else:
+        x_vals = df[x].tolist()
+        y_vals = df[y].tolist()
+        try:
+            y_numeric = pd.to_numeric(df[y], errors='coerce').tolist()
+        except Exception:
+            y_numeric = y_vals
+        c_vals = cast_numeric(color) if color else None
+        s_vals = cast_numeric(size) if size else None
+        cols = [x_vals, y_numeric]
+        if c_vals is not None:
+            cols.append(c_vals)
+        if s_vals is not None:
+            cols.append(s_vals)
+        ds_cols = _downsample_columns(cols, sample)
+        x_vals, y_numeric = ds_cols[0], ds_cols[1]
+        c_vals = ds_cols[2] if (len(ds_cols) > 2 and ('color' in locals() and color)) else c_vals
+        s_vals = ds_cols[3] if (len(ds_cols) > 3 and ('size' in locals() and size)) else s_vals
+        return {
+            "x": _sanitize_list(x_vals),
+            "y": _sanitize_list(y_numeric),
+            "x_label": x,
+            "y_label": y,
+            "color": _sanitize_list(c_vals),
+            "size": _sanitize_list(s_vals),
+            "stats": _basic_stats([v for v in y_numeric if v is not None]),
+            "warnings": warnings,
+        }
 
 @router.get("/{dataset_id}/json_series")
 async def json_series(
@@ -539,7 +626,8 @@ async def json_bar(
     dataset_id: str,
     category: str = Query(...),
     value: str = Query(...),
-    agg: str = Query("mean", description="Aggregation: mean|sum|count")
+    agg: str = Query("mean", description="Aggregation: mean|sum|count"),
+    bins: int = Query(10, description="Number of bins when category is numeric")
 ):
     if dataset_id not in datasets:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -548,19 +636,46 @@ async def json_bar(
     if category not in df.columns or value not in df.columns:
         raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
 
-    if agg == "mean":
-        agg_df = df.groupby(category)[value].mean().reset_index()
-    elif agg == "sum":
-        agg_df = df.groupby(category)[value].sum().reset_index()
-    elif agg == "count":
-        agg_df = df.groupby(category)[value].count().reset_index()
+    warnings: List[str] = []
+    # If category is numeric, bin it
+    cat_series = df[category]
+    if pd.api.types.is_numeric_dtype(cat_series) or pd.api.types.is_datetime64_any_dtype(cat_series):
+        try:
+            if not pd.api.types.is_numeric_dtype(cat_series):
+                # attempt to convert datetime to ordinal
+                cat_numeric = pd.to_datetime(cat_series, errors='coerce').map(lambda d: d.toordinal() if pd.notna(d) else None)
+            else:
+                cat_numeric = pd.to_numeric(cat_series, errors='coerce')
+            # bin numeric category
+            binned = pd.cut(cat_numeric, bins=bins)
+            grp = df.groupby(binned)[value]
+            if agg == "mean":
+                agg_df = grp.mean().reset_index()
+            elif agg == "sum":
+                agg_df = grp.sum().reset_index()
+            elif agg == "count":
+                agg_df = grp.count().reset_index()
+            else:
+                raise HTTPException(status_code=400, detail="Unsupported aggregation")
+            x_out = [str(b) for b in agg_df[binned.name]]
+            y_out = pd.to_numeric(agg_df[value], errors='coerce').tolist()
+        except Exception as e:
+            warnings.append(f"Failed to bin numeric category: {e}")
+            grp = df.groupby(category)[value]
+            agg_df = grp.mean().reset_index() if agg == 'mean' else grp.sum().reset_index() if agg == 'sum' else grp.count().reset_index()
+            x_out = agg_df[category].astype(str).tolist()
+            y_out = pd.to_numeric(agg_df[value], errors='coerce').tolist()
     else:
-        raise HTTPException(status_code=400, detail="Unsupported aggregation")
+        grp = df.groupby(category)[value]
+        agg_df = grp.mean().reset_index() if agg == 'mean' else grp.sum().reset_index() if agg == 'sum' else grp.count().reset_index()
+        x_out = agg_df[category].astype(str).tolist()
+        y_out = pd.to_numeric(agg_df[value], errors='coerce').tolist()
 
     return {
-        "x": agg_df[category].astype(str).tolist(),
-        "y": pd.to_numeric(agg_df[value], errors='coerce').tolist(),
+        "x": _sanitize_list(x_out),
+        "y": _sanitize_list(y_out),
         "x_label": category,
         "y_label": f"{agg}({value})",
-        "stats": _basic_stats(pd.to_numeric(agg_df[value], errors='coerce').tolist()),
+        "stats": _basic_stats([v for v in y_out if v is not None]),
+        "warnings": warnings,
     }

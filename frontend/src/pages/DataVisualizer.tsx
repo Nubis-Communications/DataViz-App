@@ -84,6 +84,9 @@ interface ChartConfig {
   aggregation?: string;
   customizations: ChartCustomizations;
   enabled: boolean;
+  facetMode?: 'none' | 'grid';
+  facetCols?: number;
+  autoRefresh?: boolean;
 }
 
 interface ChartCustomizations {
@@ -146,6 +149,7 @@ const DataVisualizer: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'warning' | 'info' });
+  const [statusLog, setStatusLog] = useState<Array<{ ts: string; level: 'info' | 'warning' | 'error'; message: string }>>([]);
   
   // Refs for chart containers
   const chartRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
@@ -161,6 +165,17 @@ const DataVisualizer: React.FC = () => {
       fetchDatasetInfo();
       fetchDatasetPreview();
     }
+  }, [selectedDataset]);
+
+  // Refresh dataset info when returning to tab/window to reflect Data Explorer changes
+  useEffect(() => {
+    const onFocus = () => {
+      if (selectedDataset) {
+        fetchDatasetInfo();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, [selectedDataset]);
 
   // Load Plotly.js if not already loaded
@@ -191,6 +206,21 @@ const DataVisualizer: React.FC = () => {
       }
     });
   }, [plotData]);
+
+  // Auto-refresh active chart when its config changes
+  useEffect(() => {
+    const active = charts[activeTab];
+    if (!active || !selectedDataset) return;
+    // update default title if empty
+    if (!active.title && active.xAxis && active.yAxis) {
+      updateChart(active.id, { title: `${active.yAxis} vs ${active.xAxis}` });
+    }
+    if (active.enabled && active.autoRefresh) {
+      const timer = setTimeout(() => generateChart(active), 300);
+      return () => clearTimeout(timer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charts, activeTab, selectedDataset]);
 
   const fetchDatasets = async () => {
     try {
@@ -234,6 +264,11 @@ const DataVisualizer: React.FC = () => {
     setSnackbar({ open: true, message, severity });
   };
 
+  const logStatus = (level: 'info' | 'warning' | 'error', message: string) => {
+    const ts = new Date().toLocaleTimeString();
+    setStatusLog(prev => [{ ts, level, message }, ...prev].slice(0, 50));
+  };
+
   const closeSnackbar = () => {
     setSnackbar({ ...snackbar, open: false });
   };
@@ -242,7 +277,7 @@ const DataVisualizer: React.FC = () => {
     const newChart: ChartConfig = {
       id: `chart_${Date.now()}`,
       type: 'bar',
-      title: `New Chart ${charts.length + 1}`,
+      title: datasetInfo ? `${getNumericColumns()[0] || ''} vs ${datasetInfo.column_names[0] || ''}` : `New Chart ${charts.length + 1}`,
       xAxis: datasetInfo?.column_names[0] || '',
       yAxis: getNumericColumns()[0] || '',
       customizations: {
@@ -257,6 +292,9 @@ const DataVisualizer: React.FC = () => {
         height: 400,
       },
       enabled: true,
+      facetMode: 'none',
+      facetCols: 2,
+      autoRefresh: true,
     };
     setCharts(prev => [...prev, newChart]);
   };
@@ -282,11 +320,14 @@ const DataVisualizer: React.FC = () => {
       console.log('Generating JSON chart with config:', chart);
       let response;
       if (chart.type === 'bar') {
-        const params = new URLSearchParams({ category: chart.xAxis || '', value: chart.yAxis || '', agg: chart.aggregation || 'mean' });
+        const params = new URLSearchParams({ category: chart.xAxis || '', value: chart.yAxis || '', agg: chart.aggregation || 'mean', bins: '10' });
         response = await axios.get(`/visualize/${selectedDataset}/json_bar?${params.toString()}`);
       } else {
         // default to scatter-style JSON
         const params = new URLSearchParams({ x: chart.xAxis || '', y: chart.yAxis || '', sample: '1000' });
+        if (chart.groupBy) params.set('group', chart.groupBy);
+        if (chart.colorBy) params.set('color', chart.colorBy);
+        if (chart.sizeBy) params.set('size', chart.sizeBy);
         response = await axios.get(`/visualize/${selectedDataset}/json_scatter?${params.toString()}`);
       }
 
@@ -303,12 +344,14 @@ const DataVisualizer: React.FC = () => {
       });
 
       showSnackbar('Chart generated successfully', 'success');
+      logStatus('info', `Chart "${chart.title}" generated`);
       
     } catch (err: any) {
       console.error('Chart generation error:', err);
       const errorMessage = err.response?.data?.detail || 'Failed to generate chart';
       setError(errorMessage);
       showSnackbar(errorMessage, 'error');
+      logStatus('error', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -387,35 +430,126 @@ const DataVisualizer: React.FC = () => {
 
       const type = chart.type;
       let data: any[] = [];
-      if (type === 'bar') {
-        data = [{ x: json.x, y: json.y, type: 'bar', name: chart.title }];
-      } else if (type === 'line') {
-        data = [{ x: json.x, y: json.y, type: 'scatter', mode: 'lines+markers', name: chart.title }];
-      } else if (type === 'pie') {
-        data = [{ labels: json.labels || json.x, values: json.values || json.y, type: 'pie', name: chart.title }];
-      } else {
-        // default scatter
-        data = [{ x: json.x, y: json.y, type: 'scatter', mode: 'markers', name: chart.title }];
-      }
-
-      const layout: any = {
-        title: chart.title,
-        xaxis: { title: json.x_label || chart.xAxis },
-        yaxis: { title: json.y_label || chart.yAxis },
-        template: chart.customizations.theme,
-        width: chart.customizations.width,
-        height: chart.customizations.height
-      };
-
-      chartContainer.innerHTML = '';
-      window.Plotly.newPlot(chartContainer, data, layout, {
-          responsive: true,
-          displayModeBar: true,
-          modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
-          displaylogo: false
+      const baseScatter = (x: any[], y: any[], name: string, g?: any) => ({
+        x,
+        y,
+        type: type === 'bar' ? 'bar' : 'scatter',
+        mode: type === 'line' ? 'lines+markers' : 'markers',
+        name,
+        marker: {
+          color: g?.color ?? json.color,
+          size: g?.size ?? json.size
+        }
       });
+
+      if (chart.groupBy && json.groups && chart.facetMode === 'grid') {
+        // Facet grid: render per-group charts in a simple CSS grid
+        const cols = Math.max(1, chart.facetCols || 2);
+        const wrapperId = `facet-wrapper-${chart.id}`;
+        let wrapper = chartContainer.querySelector(`#${wrapperId}`) as HTMLDivElement | null;
+        if (!wrapper) {
+          chartContainer.innerHTML = '';
+          wrapper = document.createElement('div');
+          wrapper.id = wrapperId;
+          wrapper.style.display = 'grid';
+          wrapper.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+          wrapper.style.gap = '8px';
+          chartContainer.appendChild(wrapper);
+        } else {
+          wrapper.innerHTML = '';
+        }
+        json.groups.forEach((g: any) => {
+          const cell = document.createElement('div');
+          cell.style.width = '100%';
+          cell.style.height = '280px';
+          wrapper!.appendChild(cell);
+          const traces = [baseScatter(g.x, g.y, g.name, g)];
+          const layout: any = {
+            title: g.name,
+            xaxis: { title: json.x_label || chart.xAxis },
+            yaxis: { title: json.y_label || chart.yAxis },
+            template: chart.customizations.theme,
+            margin: { t: 30, r: 10, b: 40, l: 50 }
+          };
+          window.Plotly.newPlot(cell, traces, layout, { responsive: true, displaylogo: false });
+        });
+        return;
+      } else if (chart.groupBy && json.groups) {
+        data = json.groups.map((g: any) => baseScatter(g.x, g.y, g.name, g));
+        chartContainer.innerHTML = '';
+        const layout: any = {
+          title: chart.title,
+          xaxis: { title: json.x_label || chart.xAxis },
+          yaxis: { title: json.y_label || chart.yAxis },
+          template: chart.customizations.theme,
+          width: chart.customizations.width,
+          height: chart.customizations.height
+        };
+        window.Plotly.newPlot(chartContainer, data, layout, { responsive: true, displaylogo: false });
+        return;
+      } else if (type === 'bar') {
+        data = [{ x: json.x, y: json.y, type: 'bar', name: chart.title }];
+        chartContainer.innerHTML = '';
+        const layout: any = {
+          title: chart.title,
+          xaxis: { title: json.x_label || chart.xAxis },
+          yaxis: { title: json.y_label || chart.yAxis },
+          template: chart.customizations.theme,
+          width: chart.customizations.width,
+          height: chart.customizations.height
+        };
+        window.Plotly.newPlot(chartContainer, data, layout, { responsive: true, displaylogo: false });
+        return;
+      } else if (type === 'line') {
+        data = [baseScatter(json.x, json.y, chart.title)];
+        data[0].mode = 'lines+markers';
+        chartContainer.innerHTML = '';
+        const layout: any = {
+          title: chart.title,
+          xaxis: { title: json.x_label || chart.xAxis },
+          yaxis: { title: json.y_label || chart.yAxis },
+          template: chart.customizations.theme,
+          width: chart.customizations.width,
+          height: chart.customizations.height
+        };
+        window.Plotly.newPlot(chartContainer, data, layout, { responsive: true, displaylogo: false });
+        return;
+      } else if (type === 'pie') {
+        const traces = [{ labels: json.labels || json.x, values: json.values || json.y, type: 'pie', name: chart.title }];
+        chartContainer.innerHTML = '';
+        const layout: any = {
+          title: chart.title,
+          template: chart.customizations.theme,
+          width: chart.customizations.width,
+          height: chart.customizations.height
+        };
+        window.Plotly.newPlot(chartContainer, traces, layout, { responsive: true, displaylogo: false });
+        return;
+      } else {
+        data = [baseScatter(json.x, json.y, chart.title)];
+        chartContainer.innerHTML = '';
+        const layout: any = {
+          title: chart.title,
+          xaxis: { title: json.x_label || chart.xAxis },
+          yaxis: { title: json.y_label || chart.yAxis },
+          template: chart.customizations.theme,
+          width: chart.customizations.width,
+          height: chart.customizations.height
+        };
+        window.Plotly.newPlot(chartContainer, data, layout, { responsive: true, displaylogo: false });
+        return;
+      }
+      // Fallback no-op (should have returned in branches)
+      return;
       
       console.log(`Chart ${chartId} rendered successfully`);
+
+      // Show any backend warnings in the snackbar
+      if (json.warnings && Array.isArray(json.warnings) && json.warnings.length > 0) {
+        const msg = json.warnings.join(' | ');
+        showSnackbar(msg, 'warning');
+        logStatus('warning', msg);
+      }
     } catch (err) {
       console.error(`Error rendering chart ${chartId}:`, err);
       chartContainer.innerHTML = `<div style="padding: 20px; text-align: center; color: red;">Error rendering chart: ${err}</div>`;
@@ -576,31 +710,7 @@ const DataVisualizer: React.FC = () => {
               >
                 Add New Chart
               </Button>
-              <Button
-                variant="outlined"
-                startIcon={<RefreshIcon />}
-                onClick={async () => {
-                  try {
-                    const csv = 'time,signal\n1,10\n2,15\n3,13\n4,20\n5,18\n6,25\n7,23\n8,30\n9,28\n10,35\n';
-                    const blob = new Blob([csv], { type: 'text/csv' });
-                    const file = new File([blob], 'dummy_dataset.csv', { type: 'text/csv' });
-                    const form = new FormData();
-                    form.append('file', file);
-                    const res = await axios.post('/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
-                    const id = res.data.dataset_id as string;
-                    await fetchDatasets();
-                    setSelectedDataset(id);
-                    showSnackbar('Dummy dataset uploaded', 'success');
-                  } catch (e) {
-                    console.error(e);
-                    showSnackbar('Failed to upload dummy dataset', 'error');
-                  }
-                }}
-                fullWidth
-                sx={{ mt: 1 }}
-              >
-                Load Dummy Dataset
-              </Button>
+              {/* Dummy loader removed per request */}
               <Button
                 variant="contained"
                 color="secondary"
@@ -612,6 +722,23 @@ const DataVisualizer: React.FC = () => {
               >
                 Test Chart
               </Button>
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" gutterBottom>Status</Typography>
+                <Paper variant="outlined" sx={{ p: 1, maxHeight: 160, overflow: 'auto' }}>
+                  {statusLog.length === 0 ? (
+                    <Typography variant="caption" color="text.secondary">No messages yet</Typography>
+                  ) : (
+                    statusLog.map((s, idx) => (
+                      <Box key={idx} sx={{ display: 'flex', gap: 1, alignItems: 'baseline' }}>
+                        <Typography variant="caption" color="text.secondary">[{s.ts}]</Typography>
+                        <Typography variant="caption" color={s.level === 'error' ? 'error.main' : s.level === 'warning' ? 'warning.main' : 'text.primary'}>
+                          {s.level.toUpperCase()}: {s.message}
+                        </Typography>
+                      </Box>
+                    ))
+                  )}
+                </Paper>
+              </Box>
             </CardContent>
           </Card>
         </Grid>
@@ -644,7 +771,7 @@ const DataVisualizer: React.FC = () => {
                         label={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             {chartTypes.find(type => type.value === chart.type)?.icon}
-                            {chart.title}
+                            {chart.title || `${chart.yAxis} vs ${chart.xAxis}`}
                           </Box>
                         }
                         icon={chartTypes.find(type => type.value === chart.type)?.icon}
@@ -656,7 +783,14 @@ const DataVisualizer: React.FC = () => {
                   {charts.map((chart, index) => (
                     <TabPanel key={chart.id} value={activeTab} index={index}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                        <Typography variant="h6">{chart.title}</Typography>
+                        <TextField
+                          variant="outlined"
+                          size="small"
+                          value={chart.title || ''}
+                          onChange={(e) => updateChart(chart.id, { title: e.target.value })}
+                          placeholder={`${chart.yAxis} vs ${chart.xAxis}`}
+                          sx={{ minWidth: 280 }}
+                        />
                         <Box>
                           <IconButton onClick={() => generateChart(chart)} disabled={loading || !selectedDataset}>
                             {loading ? <CircularProgress size={20} /> : <RefreshIcon />}
@@ -725,11 +859,12 @@ const DataVisualizer: React.FC = () => {
                         <FormControl fullWidth>
                           <InputLabel>Color By</InputLabel>
                           <Select
-                            value={chart.colorBy}
+                            value={chart.colorBy ?? ''}
                             label="Color By"
                             onChange={(e) => updateChart(chart.id, { colorBy: e.target.value as string })}
                             fullWidth
                           >
+                            <MenuItem value="">(None)</MenuItem>
                             {datasetInfo?.column_names.map((col) => (
                               <MenuItem key={col} value={col}>
                                 {col}
@@ -740,11 +875,12 @@ const DataVisualizer: React.FC = () => {
                         <FormControl fullWidth>
                           <InputLabel>Size By</InputLabel>
                           <Select
-                            value={chart.sizeBy}
+                            value={chart.sizeBy ?? ''}
                             label="Size By"
                             onChange={(e) => updateChart(chart.id, { sizeBy: e.target.value as string })}
                             fullWidth
                           >
+                            <MenuItem value="">(None)</MenuItem>
                             {datasetInfo?.column_names.map((col) => (
                               <MenuItem key={col} value={col}>
                                 {col}
@@ -755,11 +891,12 @@ const DataVisualizer: React.FC = () => {
                         <FormControl fullWidth>
                           <InputLabel>Group By</InputLabel>
                           <Select
-                            value={chart.groupBy}
+                            value={chart.groupBy ?? ''}
                             label="Color By"
                             onChange={(e) => updateChart(chart.id, { groupBy: e.target.value as string })}
                             fullWidth
                           >
+                            <MenuItem value="">(None)</MenuItem>
                             {datasetInfo?.column_names.map((col) => (
                               <MenuItem key={col} value={col}>
                                 {col}
@@ -783,6 +920,31 @@ const DataVisualizer: React.FC = () => {
                             <MenuItem value="max">Max</MenuItem>
                           </Select>
                         </FormControl>
+                        {chart.groupBy && (
+                          <>
+                            <FormControl fullWidth>
+                              <InputLabel>Facet Mode</InputLabel>
+                              <Select
+                                value={chart.facetMode || 'none'}
+                                label="Facet Mode"
+                                onChange={(e) => updateChart(chart.id, { facetMode: e.target.value as any })}
+                                fullWidth
+                              >
+                                <MenuItem value="none">Overlay</MenuItem>
+                                <MenuItem value="grid">Grid (facets)</MenuItem>
+                              </Select>
+                            </FormControl>
+                            {chart.facetMode === 'grid' && (
+                              <TextField
+                                label="Facet Columns"
+                                type="number"
+                                value={chart.facetCols}
+                                onChange={(e) => updateChart(chart.id, { facetCols: Math.max(1, parseInt(e.target.value || '1', 10)) })}
+                                fullWidth
+                              />
+                            )}
+                          </>
+                        )}
                         <FormControl fullWidth>
                           <InputLabel>Theme</InputLabel>
                           <Select

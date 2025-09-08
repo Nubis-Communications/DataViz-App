@@ -282,6 +282,13 @@ def apply_transformations(df: pd.DataFrame, transformations: List[Dict[str, Any]
     for transform in transformations:
         transform_type = transform.get("type")
         
+        if transform_type == "apply_filters":
+            # Persist filters as a transformation on the dataframe
+            filters_cfg = transform.get("config", {}).get("filters", {})
+            if isinstance(filters_cfg, dict) and filters_cfg:
+                transformed_df = apply_filters(transformed_df, filters_cfg)
+            continue
+
         if transform_type == "rename_column":
             old_name = transform.get("old_name")
             new_name = transform.get("new_name")

@@ -43,7 +43,6 @@ import {
   Explore as ExploreIcon,
   FilterList as FilterIcon,
   Transform as TransformIcon,
-  Merge as MergeIcon,
   Add as AddIcon,
   Remove as RemoveIcon,
   Refresh as RefreshIcon,
@@ -120,10 +119,38 @@ const DataExplorer: React.FC = () => {
   
   // UI states
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'warning' | 'info' });
+  
+  // Dataset merge/append states
+  const [showMergeDialog, setShowMergeDialog] = useState(false);
+  const [showConcatDialog, setShowConcatDialog] = useState(false);
+  const [mergeConfig, setMergeConfig] = useState({
+    leftDataset: '',
+    rightDataset: '',
+    how: 'inner' as 'inner' | 'left' | 'right' | 'outer',
+    joinColumns: [] as string[],
+    leftColumns: [] as string[],
+    rightColumns: [] as string[]
+  });
+  const [concatConfig, setConcatConfig] = useState({
+    selectedDatasets: [] as string[],
+    axis: 0 as 0 | 1,
+    ignoreIndex: true
+  });
+  const [availableColumns, setAvailableColumns] = useState<Record<string, string[]>>({});
+  
+  // Dataset history for undo/redo
+  const [datasetHistory, setDatasetHistory] = useState<any[]>([]);
+  const [currentDatasetIndex, setCurrentDatasetIndex] = useState(-1);
 
   useEffect(() => {
     fetchDatasets();
   }, []);
+
+  useEffect(() => {
+    if (datasets.length > 0) {
+      fetchAllColumnInfo();
+    }
+  }, [datasets]);
 
   useEffect(() => {
     if (selectedDataset) {
@@ -152,6 +179,19 @@ const DataExplorer: React.FC = () => {
       setDatasets(response.data.datasets);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch datasets');
+    }
+  };
+
+  const fetchAllColumnInfo = async () => {
+    try {
+      const columnInfo: Record<string, string[]> = {};
+      for (const dataset of datasets) {
+        const response = await axios.get(`/dataset/${dataset.dataset_id}`);
+        columnInfo[dataset.dataset_id] = response.data.column_names || [];
+      }
+      setAvailableColumns(columnInfo);
+    } catch (error) {
+      console.error('Error fetching column info:', error);
     }
   };
 
@@ -411,6 +451,70 @@ const DataExplorer: React.FC = () => {
     setHasUnsavedChanges(true);
   };
 
+  const undoDatasetChange = () => {
+    if (currentDatasetIndex > 0) {
+      const newIndex = currentDatasetIndex - 1;
+      setCurrentDatasetIndex(newIndex);
+      const previousState = datasetHistory[newIndex];
+      setPreviewData(previousState.data);
+      setFilteredData(previousState.data);
+      setFilters(previousState.filters);
+      showSnackbar('Dataset change undone', 'success');
+    }
+  };
+
+  const handleMerge = async () => {
+    try {
+      const payload: any = {
+        target_dataset_id: mergeConfig.rightDataset,
+        how: mergeConfig.how
+      };
+      
+      if (mergeConfig.joinColumns.length > 0) {
+        payload.on = mergeConfig.joinColumns;
+      } else if (mergeConfig.leftColumns.length > 0 && mergeConfig.rightColumns.length > 0) {
+        payload.left_on = mergeConfig.leftColumns;
+        payload.right_on = mergeConfig.rightColumns;
+      }
+      
+      const response = await axios.post(`/data/${mergeConfig.leftDataset}/merge`, payload);
+      const newId = response.data.new_dataset_id;
+      
+      await fetchDatasets();
+      await fetchAllColumnInfo();
+      setSelectedDataset(newId);
+      setShowMergeDialog(false);
+      showSnackbar('Datasets merged successfully', 'success');
+    } catch (error) {
+      console.error('Merge failed:', error);
+      showSnackbar('Merge failed. Please check your configuration.', 'error');
+    }
+  };
+
+  const handleAppend = async () => {
+    try {
+      const payload = {
+        source_datasets: concatConfig.selectedDatasets,
+        axis: concatConfig.axis,
+        ignore_index: concatConfig.ignoreIndex
+      };
+      
+      // Use the first selected dataset as the base for the endpoint
+      const baseDatasetId = concatConfig.selectedDatasets[0];
+      const response = await axios.post(`/data/${baseDatasetId}/concatenate`, payload);
+      const newId = response.data.new_dataset_id;
+      
+      await fetchDatasets();
+      await fetchAllColumnInfo();
+      setSelectedDataset(newId);
+      setShowConcatDialog(false);
+      showSnackbar('Datasets appended successfully', 'success');
+    } catch (error) {
+      console.error('Append failed:', error);
+      showSnackbar('Append failed. Please check your configuration.', 'error');
+    }
+  };
+
   const saveAllChanges = async () => {
     try {
       // Here you would typically send the updated data to the backend
@@ -513,6 +617,12 @@ const DataExplorer: React.FC = () => {
 
       const response = await axios.post(`/data/${selectedDataset}/filter`, filterConfig);
       setPreviewData(response.data.preview_data);
+
+      // Persist filters as a transformation so state remains when navigating
+      await axios.post(`/data/${selectedDataset}/transform`, [
+        { type: 'apply_filters', config: { filters: filterConfig }, enabled: true }
+      ]);
+      showSnackbar('Filters applied and saved', 'success');
       
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to apply filters');
@@ -548,6 +658,15 @@ const DataExplorer: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const getUniqueValues = (column: string): string[] => {
+    const values = new Set<string>();
+    (previewData || []).forEach(row => {
+      const v = row[column];
+      if (v !== null && v !== undefined && v !== '') values.add(String(v));
+    });
+    return Array.from(values).slice(0, 200);
   };
 
   const renderFilterValueInput = (filter: FilterConfig) => {
@@ -604,18 +723,25 @@ const DataExplorer: React.FC = () => {
       );
     }
 
+    const uniqueValues = getUniqueValues(filter.column);
     return (
-      <TextField
-        size="small"
-        placeholder="Value"
-        value={filter.value || ''}
-        onChange={(e) => updateFilter(
-          filters.findIndex(f => f === filter),
-          'value',
-          e.target.value
-        )}
-        sx={{ width: 150 }}
-      />
+      <FormControl size="small" sx={{ minWidth: 180 }}>
+        <InputLabel>Value</InputLabel>
+        <Select
+          value={filter.value || ''}
+          label="Value"
+          onChange={(e) => updateFilter(
+            filters.findIndex(f => f === filter),
+            'value',
+            e.target.value
+          )}
+          renderValue={(val) => String(val)}
+        >
+          {uniqueValues.map(v => (
+            <MenuItem key={v} value={v}>{v}</MenuItem>
+          ))}
+        </Select>
+      </FormControl>
     );
   };
 
@@ -897,6 +1023,31 @@ const DataExplorer: React.FC = () => {
                   disabled={!selectedDataset}
                 >
                   Export
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setShowMergeDialog(true)}
+                  disabled={datasets.length < 2}
+                >
+                  Merge
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={() => setShowConcatDialog(true)}
+                  disabled={datasets.length < 2}
+                >
+                  Append
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<UndoIcon />}
+                  onClick={undoDatasetChange}
+                  disabled={datasetHistory.length < 2}
+                >
+                  Undo Dataset
                 </Button>
                 {hasUnsavedChanges && (
                   <Button
@@ -1312,6 +1463,328 @@ const DataExplorer: React.FC = () => {
       </Grid>
 
       {/* Dialogs */}
+
+      {/* Enhanced Merge Dialog */}
+      <Dialog open={showMergeDialog} onClose={() => setShowMergeDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TransformIcon color="primary" />
+            <Typography variant="h6">Smart Dataset Merger</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
+            {/* Dataset Selection */}
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <FormControl fullWidth>
+                <InputLabel>Left Dataset</InputLabel>
+                <Select
+                  value={mergeConfig.leftDataset}
+                  label="Left Dataset"
+                  onChange={(e) => setMergeConfig(prev => ({ ...prev, leftDataset: e.target.value, joinColumns: [], leftColumns: [], rightColumns: [] }))}
+                >
+                  {datasets.map(d => (
+                    <MenuItem key={d.dataset_id} value={d.dataset_id}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">{d.filename}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {d.rows} rows × {d.columns} columns
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl fullWidth>
+                <InputLabel>Right Dataset</InputLabel>
+                <Select
+                  value={mergeConfig.rightDataset}
+                  label="Right Dataset"
+                  onChange={(e) => setMergeConfig(prev => ({ ...prev, rightDataset: e.target.value, joinColumns: [], leftColumns: [], rightColumns: [] }))}
+                >
+                  {datasets.filter(d => d.dataset_id !== mergeConfig.leftDataset).map(d => (
+                    <MenuItem key={d.dataset_id} value={d.dataset_id}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">{d.filename}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {d.rows} rows × {d.columns} columns
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+
+            {/* Merge Type */}
+            <FormControl fullWidth>
+              <InputLabel>Join Type</InputLabel>
+              <Select
+                value={mergeConfig.how}
+                label="Join Type"
+                onChange={(e) => setMergeConfig(prev => ({ ...prev, how: e.target.value as 'inner' | 'left' | 'right' | 'outer' }))}
+              >
+                <MenuItem value="inner">
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">Inner Join</Typography>
+                    <Typography variant="caption" color="text.secondary">Only matching records</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="left">
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">Left Join</Typography>
+                    <Typography variant="caption" color="text.secondary">All left + matching right</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="right">
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">Right Join</Typography>
+                    <Typography variant="caption" color="text.secondary">All right + matching left</Typography>
+                  </Box>
+                </MenuItem>
+                <MenuItem value="outer">
+                  <Box>
+                    <Typography variant="body2" fontWeight="bold">Outer Join</Typography>
+                    <Typography variant="caption" color="text.secondary">All records from both</Typography>
+                  </Box>
+                </MenuItem>
+              </Select>
+            </FormControl>
+
+            {/* Column Selection */}
+            {mergeConfig.leftDataset && mergeConfig.rightDataset && (
+              <Box>
+                <Typography variant="subtitle1" gutterBottom>
+                  Join Columns
+                </Typography>
+                
+                {/* Common Columns Option */}
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Option 1: Use common column names
+                  </Typography>
+                  <FormControl fullWidth>
+                    <InputLabel>Common Columns</InputLabel>
+                    <Select
+                      multiple
+                      value={mergeConfig.joinColumns}
+                      label="Common Columns"
+                      onChange={(e) => setMergeConfig(prev => ({ ...prev, joinColumns: e.target.value as string[], leftColumns: [], rightColumns: [] }))}
+                    >
+                      {(() => {
+                        const leftCols = availableColumns[mergeConfig.leftDataset] || [];
+                        const rightCols = availableColumns[mergeConfig.rightDataset] || [];
+                        const commonCols = leftCols.filter(col => rightCols.includes(col));
+                        return commonCols.map(col => (
+                          <MenuItem key={col} value={col}>{col}</MenuItem>
+                        ));
+                      })()}
+                    </Select>
+                  </FormControl>
+                </Box>
+
+                {/* Different Column Names Option */}
+                <Box>
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    Option 2: Specify different column names
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 2 }}>
+                    <FormControl fullWidth>
+                      <InputLabel>Left Dataset Columns</InputLabel>
+                      <Select
+                        multiple
+                        value={mergeConfig.leftColumns}
+                        label="Left Dataset Columns"
+                        onChange={(e) => setMergeConfig(prev => ({ ...prev, leftColumns: e.target.value as string[], joinColumns: [] }))}
+                      >
+                        {(availableColumns[mergeConfig.leftDataset] || []).map(col => (
+                          <MenuItem key={col} value={col}>{col}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <FormControl fullWidth>
+                      <InputLabel>Right Dataset Columns</InputLabel>
+                      <Select
+                        multiple
+                        value={mergeConfig.rightColumns}
+                        label="Right Dataset Columns"
+                        onChange={(e) => setMergeConfig(prev => ({ ...prev, rightColumns: e.target.value as string[], joinColumns: [] }))}
+                      >
+                        {(availableColumns[mergeConfig.rightDataset] || []).map(col => (
+                          <MenuItem key={col} value={col}>{col}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Box>
+                </Box>
+              </Box>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowMergeDialog(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleMerge}
+            disabled={!mergeConfig.leftDataset || !mergeConfig.rightDataset || 
+              (mergeConfig.joinColumns.length === 0 && (mergeConfig.leftColumns.length === 0 || mergeConfig.rightColumns.length === 0))}
+          >
+            Merge Datasets
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Enhanced Append Dialog */}
+      <Dialog open={showConcatDialog} onClose={() => setShowConcatDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddIcon color="primary" />
+            <Typography variant="h6">Smart Dataset Appender</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
+            {/* Dataset Selection with Checkboxes */}
+            <Box>
+              <Typography variant="subtitle1" gutterBottom>
+                Select Datasets to Append
+              </Typography>
+              <Paper sx={{ p: 2, maxHeight: 300, overflow: 'auto' }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {datasets.map(dataset => (
+                    <FormControlLabel
+                      key={dataset.dataset_id}
+                      control={
+                        <Checkbox
+                          checked={concatConfig.selectedDatasets.includes(dataset.dataset_id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setConcatConfig(prev => ({
+                                ...prev,
+                                selectedDatasets: [...prev.selectedDatasets, dataset.dataset_id]
+                              }));
+                            } else {
+                              setConcatConfig(prev => ({
+                                ...prev,
+                                selectedDatasets: prev.selectedDatasets.filter(id => id !== dataset.dataset_id)
+                              }));
+                            }
+                          }}
+                        />
+                      }
+                      label={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
+                          <Box sx={{ flexGrow: 1 }}>
+                            <Typography variant="body2" fontWeight="bold">{dataset.filename}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {dataset.rows} rows × {dataset.columns} columns
+                            </Typography>
+                          </Box>
+                          <Chip 
+                            label={`${dataset.rows}×${dataset.columns}`} 
+                            size="small" 
+                            variant="outlined" 
+                          />
+                        </Box>
+                      }
+                    />
+                  ))}
+                </Box>
+              </Paper>
+            </Box>
+
+            {/* Concatenation Options */}
+            <Box>
+              <Typography variant="subtitle1" gutterBottom>
+                Append Options
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 2 }}>
+                <FormControl fullWidth>
+                  <InputLabel>Append Direction</InputLabel>
+                  <Select
+                    value={concatConfig.axis}
+                    label="Append Direction"
+                    onChange={(e) => setConcatConfig(prev => ({ ...prev, axis: Number(e.target.value) as 0 | 1 }))}
+                  >
+                    <MenuItem value={0}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">Vertical (Rows)</Typography>
+                        <Typography variant="caption" color="text.secondary">Stack datasets on top of each other</Typography>
+                      </Box>
+                    </MenuItem>
+                    <MenuItem value={1}>
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">Horizontal (Columns)</Typography>
+                        <Typography variant="caption" color="text.secondary">Add columns side by side</Typography>
+                      </Box>
+                    </MenuItem>
+                  </Select>
+                </FormControl>
+                <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <FormControlLabel
+                    control={
+                      <Checkbox 
+                        checked={concatConfig.ignoreIndex} 
+                        onChange={(e) => setConcatConfig(prev => ({ ...prev, ignoreIndex: e.target.checked }))} 
+                      />
+                    }
+                    label="Reset row numbers"
+                  />
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Preview Info */}
+            {concatConfig.selectedDatasets.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1" gutterBottom>
+                  Preview
+                </Typography>
+                <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
+                  <Typography variant="body2">
+                    {concatConfig.axis === 0 ? (
+                      <>
+                        <strong>Vertical Append:</strong> Will create a dataset with{' '}
+                        <strong>{concatConfig.selectedDatasets.reduce((sum, id) => {
+                          const dataset = datasets.find(d => d.dataset_id === id);
+                          return sum + (dataset?.rows || 0);
+                        }, 0)} rows</strong> and{' '}
+                        <strong>{Math.max(...concatConfig.selectedDatasets.map(id => {
+                          const dataset = datasets.find(d => d.dataset_id === id);
+                          return dataset?.columns || 0;
+                        }))} columns</strong>
+                      </>
+                    ) : (
+                      <>
+                        <strong>Horizontal Append:</strong> Will create a dataset with{' '}
+                        <strong>{Math.max(...concatConfig.selectedDatasets.map(id => {
+                          const dataset = datasets.find(d => d.dataset_id === id);
+                          return dataset?.rows || 0;
+                        }))} rows</strong> and{' '}
+                        <strong>{concatConfig.selectedDatasets.reduce((sum, id) => {
+                          const dataset = datasets.find(d => d.dataset_id === id);
+                          return sum + (dataset?.columns || 0);
+                        }, 0)} columns</strong>
+                      </>
+                    )}
+                  </Typography>
+                </Paper>
+              </Box>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowConcatDialog(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleAppend}
+            disabled={concatConfig.selectedDatasets.length < 2}
+          >
+            Append {concatConfig.selectedDatasets.length} Dataset{concatConfig.selectedDatasets.length !== 1 ? 's' : ''}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Add Column Dialog */}
       <Dialog open={showAddColumnDialog} onClose={() => setShowAddColumnDialog(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add New Column</DialogTitle>

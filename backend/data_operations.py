@@ -1,13 +1,17 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query
 from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/data", tags=["data-operations"])
+
+# Import the centralized data manager
+from data_manager import data_manager, FilterConfig, FilterType, DataType
 
 # Import from shared module to avoid circular imports
 from shared import datasets, DataInfo
@@ -49,10 +53,15 @@ async def transform_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
     
     data_info = datasets[dataset_id]
+    original_rows = len(data_info.df)
     df = data_info.df.copy()
     
     try:
+        logger.info(f"Applying transformations to {dataset_id}: {transformations}")
         transformed_df = apply_transformations(df, transformations)
+        new_rows = len(transformed_df)
+        
+        logger.info(f"Transformation result: {original_rows} rows -> {new_rows} rows")
         
         # Update the original dataset
         data_info.df = transformed_df
@@ -62,7 +71,7 @@ async def transform_dataset(
         return {
             "dataset_id": dataset_id,
             "transformations_applied": transformations,
-            "new_rows": len(transformed_df),
+            "new_rows": new_rows,
             "new_columns": len(transformed_df.columns),
             "column_names": list(transformed_df.columns)
         }
@@ -245,33 +254,116 @@ def apply_filters(df: pd.DataFrame, filters: Dict[str, Any]) -> pd.DataFrame:
     """Apply filters to dataframe"""
     filtered_df = df.copy()
     
+    logger.info(f"Starting with {len(filtered_df)} rows")
+    
     for column, filter_config in filters.items():
         if column not in df.columns:
+            logger.warning(f"Column '{column}' not found in dataframe")
             continue
         
         filter_type = filter_config.get("type")
         filter_value = filter_config.get("value")
         
+        logger.info(f"Applying filter to column '{column}': type='{filter_type}', value='{filter_value}'")
+        logger.info(f"Column data type: {filtered_df[column].dtype}")
+        logger.info(f"Filter value type: {type(filter_value)}")
+        
+        before_rows = len(filtered_df)
+        
         if filter_type == "equals":
-            filtered_df = filtered_df[filtered_df[column] == filter_value]
+            # Try to convert filter value to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    original_value = filter_value
+                    filter_value = pd.to_numeric(filter_value, errors='coerce')
+                    logger.info(f"Converted numeric filter: '{original_value}' -> {filter_value}")
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    original_value = filter_value
+                    filter_value = pd.to_datetime(filter_value, errors='coerce')
+                    logger.info(f"Converted datetime filter: '{original_value}' -> {filter_value}")
+                filtered_df = filtered_df[filtered_df[column] == filter_value]
+            except Exception as e:
+                logger.warning(f"Type conversion failed, using string comparison: {e}")
+                # Fallback to string comparison
+                filtered_df = filtered_df[filtered_df[column].astype(str) == str(filter_value)]
         elif filter_type == "not_equals":
-            filtered_df = filtered_df[filtered_df[column] != filter_value]
+            # Try to convert filter value to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    filter_value = pd.to_numeric(filter_value, errors='coerce')
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    filter_value = pd.to_datetime(filter_value, errors='coerce')
+                filtered_df = filtered_df[filtered_df[column] != filter_value]
+            except:
+                # Fallback to string comparison
+                filtered_df = filtered_df[filtered_df[column].astype(str) != str(filter_value)]
         elif filter_type == "contains":
-            filtered_df = filtered_df[filtered_df[column].astype(str).str.contains(filter_value, na=False)]
+            filtered_df = filtered_df[filtered_df[column].astype(str).str.contains(str(filter_value), na=False)]
         elif filter_type == "greater_than":
-            filtered_df = filtered_df[filtered_df[column] > filter_value]
+            # Try to convert filter value to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    filter_value = pd.to_numeric(filter_value, errors='coerce')
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    filter_value = pd.to_datetime(filter_value, errors='coerce')
+                filtered_df = filtered_df[filtered_df[column] > filter_value]
+            except:
+                # Fallback to string comparison
+                filtered_df = filtered_df[filtered_df[column].astype(str) > str(filter_value)]
         elif filter_type == "less_than":
-            filtered_df = filtered_df[filtered_df[column] < filter_value]
+            # Try to convert filter value to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    filter_value = pd.to_numeric(filter_value, errors='coerce')
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    filter_value = pd.to_datetime(filter_value, errors='coerce')
+                filtered_df = filtered_df[filtered_df[column] < filter_value]
+            except:
+                # Fallback to string comparison
+                filtered_df = filtered_df[filtered_df[column].astype(str) < str(filter_value)]
         elif filter_type == "between":
             min_val = filter_value.get("min")
             max_val = filter_value.get("max")
-            filtered_df = filtered_df[(filtered_df[column] >= min_val) & (filtered_df[column] <= max_val)]
+            # Try to convert values to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    min_val = pd.to_numeric(min_val, errors='coerce')
+                    max_val = pd.to_numeric(max_val, errors='coerce')
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    min_val = pd.to_datetime(min_val, errors='coerce')
+                    max_val = pd.to_datetime(max_val, errors='coerce')
+                filtered_df = filtered_df[(filtered_df[column] >= min_val) & (filtered_df[column] <= max_val)]
+            except:
+                # Fallback to string comparison
+                filtered_df = filtered_df[(filtered_df[column].astype(str) >= str(min_val)) & (filtered_df[column].astype(str) <= str(max_val))]
         elif filter_type == "in_list":
-            filtered_df = filtered_df[filtered_df[column].isin(filter_value)]
+            # Try to convert filter values to match column data type
+            try:
+                if pd.api.types.is_numeric_dtype(filtered_df[column]):
+                    filter_value = [pd.to_numeric(v, errors='coerce') for v in filter_value]
+                elif pd.api.types.is_datetime64_any_dtype(filtered_df[column]):
+                    filter_value = [pd.to_datetime(v, errors='coerce') for v in filter_value]
+                filtered_df = filtered_df[filtered_df[column].isin(filter_value)]
+            except:
+                # Fallback to string comparison
+                filtered_df = filtered_df[filtered_df[column].astype(str).isin([str(v) for v in filter_value])]
         elif filter_type == "is_null":
             filtered_df = filtered_df[filtered_df[column].isna()]
         elif filter_type == "not_null":
             filtered_df = filtered_df[filtered_df[column].notna()]
+        else:
+            logger.warning(f"Unknown filter type: {filter_type}")
+            continue
+        
+        after_rows = len(filtered_df)
+        logger.info(f"Filter '{column}' ({filter_type}): {before_rows} -> {after_rows} rows")
+    
+    logger.info(f"Final result: {len(filtered_df)} rows")
+    
+    # Safety check: if all rows are filtered out, log a warning and return original
+    if len(filtered_df) == 0 and len(df) > 0:
+        logger.warning("All rows filtered out! This might indicate a filter configuration issue.")
+        logger.warning("Consider checking filter values and data types.")
     
     return filtered_df
 
@@ -285,8 +377,14 @@ def apply_transformations(df: pd.DataFrame, transformations: List[Dict[str, Any]
         if transform_type == "apply_filters":
             # Persist filters as a transformation on the dataframe
             filters_cfg = transform.get("config", {}).get("filters", {})
+            logger.info(f"Applying filters: {filters_cfg}")
+            logger.info(f"Filter config details: {json.dumps(filters_cfg, indent=2)}")
             if isinstance(filters_cfg, dict) and filters_cfg:
+                before_rows = len(transformed_df)
+                logger.info(f"Before filtering: {before_rows} rows")
                 transformed_df = apply_filters(transformed_df, filters_cfg)
+                after_rows = len(transformed_df)
+                logger.info(f"Filter result: {before_rows} rows -> {after_rows} rows")
             continue
 
         if transform_type == "rename_column":
@@ -353,6 +451,8 @@ def convert_df_to_json(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 row_dict[col] = float(value)
             elif isinstance(value, pd.Timestamp):
                 row_dict[col] = value.isoformat()
+            elif isinstance(value, np.ndarray):
+                row_dict[col] = value.tolist()
             else:
                 row_dict[col] = str(value)
         data.append(row_dict)
@@ -380,4 +480,136 @@ def analyze_missing_patterns(df: pd.DataFrame) -> Dict[str, Any]:
                 pattern_key = f"{col1}_and_{col2}"
                 missing_patterns[pattern_key] = int(both_missing)
     
-    return missing_patterns 
+    return missing_patterns
+
+# New centralized data management endpoints
+
+@router.get("/versions/{version_id}")
+async def get_version_info(version_id: str):
+    """Get information about a specific dataset version"""
+    version_info = data_manager.get_version_info(version_id)
+    if not version_info:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    return version_info.to_dict()
+
+@router.get("/versions/{version_id}/data")
+async def get_version_data(version_id: str, rows: int = Query(100, description="Number of rows to return")):
+    """Get data for a specific version"""
+    df = data_manager.get_dataset(version_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    # Convert to JSON-serializable format
+    preview_data = []
+    for _, row in df.head(rows).iterrows():
+        row_dict = {}
+        for col in df.columns:
+            value = row[col]
+            if pd.isna(value):
+                row_dict[col] = None
+            elif isinstance(value, (np.integer, np.floating)):
+                row_dict[col] = float(value)
+            elif isinstance(value, pd.Timestamp):
+                row_dict[col] = value.isoformat()
+            elif isinstance(value, np.ndarray):
+                row_dict[col] = value.tolist()
+            else:
+                row_dict[col] = str(value)
+        preview_data.append(row_dict)
+    
+    return {
+        "version_id": version_id,
+        "preview_data": preview_data,
+        "total_rows": len(df),
+        "columns": list(df.columns)
+    }
+
+@router.get("/versions/{version_id}/columns")
+async def get_version_column_info(version_id: str):
+    """Get column information for a specific version"""
+    column_info = data_manager.get_column_info(version_id)
+    if not column_info:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    return {
+        "version_id": version_id,
+        "columns": column_info
+    }
+
+@router.get("/versions/{version_id}/unique-values/{column}")
+async def get_unique_values(version_id: str, column: str, limit: int = Query(100)):
+    """Get unique values for a column in a specific version"""
+    unique_values = data_manager.get_unique_values(version_id, column, limit)
+    if unique_values is None:
+        raise HTTPException(status_code=404, detail="Version or column not found")
+    
+    return {
+        "version_id": version_id,
+        "column": column,
+        "unique_values": unique_values,
+        "count": len(unique_values)
+    }
+
+@router.post("/versions/{parent_version_id}/create-filtered")
+async def create_filtered_version(
+    parent_version_id: str,
+    name: str = Body(...),
+    description: str = Body(...),
+    filters: List[Dict[str, Any]] = Body(...)
+):
+    """Create a new filtered version of a dataset"""
+    try:
+        # Convert filter dictionaries to FilterConfig objects
+        filter_configs = []
+        for filter_dict in filters:
+            filter_config = FilterConfig.from_dict(filter_dict)
+            filter_configs.append(filter_config)
+        
+        # Create the filtered version
+        version_id = data_manager.create_filtered_version(
+            parent_version_id, filter_configs, name, description
+        )
+        
+        version_info = data_manager.get_version_info(version_id)
+        return {
+            "success": True,
+            "version_id": version_id,
+            "version_info": version_info.to_dict()
+        }
+    
+    except Exception as e:
+        logger.error(f"Error creating filtered version: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating filtered version: {str(e)}")
+
+@router.get("/datasets/{dataset_id}/versions")
+async def list_dataset_versions(dataset_id: str):
+    """List all versions for a dataset"""
+    versions = data_manager.list_versions(dataset_id)
+    return {
+        "dataset_id": dataset_id,
+        "versions": [v.to_dict() for v in versions]
+    }
+
+@router.delete("/versions/{version_id}")
+async def delete_version(version_id: str):
+    """Delete a dataset version"""
+    success = data_manager.delete_version(version_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    return {"success": True, "message": f"Version {version_id} deleted"}
+
+@router.post("/clear-cache")
+async def clear_cache():
+    """Clear all temporary versions and cached data, keeping only original datasets"""
+    try:
+        result = data_manager.clear_cache()
+        return {
+            "success": True,
+            "message": f"Cache cleared successfully. Deleted {result['deleted_filtered_versions']} filtered versions and {result['deleted_datasets']} datasets. {result['remaining_original_datasets']} original datasets remain.",
+            "details": result
+        }
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) 

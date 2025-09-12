@@ -1,0 +1,35 @@
+{
+  "dataset_0_original": {
+    "version_id": "dataset_0_original",
+    "parent_id": null,
+    "name": "sdr_results_20250912_092205.csv (Original)",
+    "description": "Original uploaded dataset",
+    "created_at": "2025-09-12T14:20:05.546128",
+    "filters_applied": [],
+    "transformations_applied": [],
+    "row_count": 16,
+    "column_count": 18
+  },
+  "dataset_1_original": {
+    "version_id": "dataset_1_original",
+    "parent_id": null,
+    "name": "sdr_results_20250912_092205.csv (Original)",
+    "description": "Original uploaded dataset",
+    "created_at": "2025-09-12T14:08:33.998754",
+    "filters_applied": [],
+    "transformations_applied": [],
+    "row_count": 16,
+    "column_count": 18
+  },
+  "dataset_2_original": {
+    "version_id": "dataset_2_original",
+    "parent_id": null,
+    "name": "Full_Data_Set_Heater.csv (Original)",
+    "description": "Original uploaded dataset",
+    "created_at": "2025-09-09T16:15:04.225644",
+    "filters_applied": [],
+    "transformations_applied": [],
+    "row_count": 48,
+    "column_count": 39
+  }
+}

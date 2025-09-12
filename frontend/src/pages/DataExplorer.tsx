@@ -62,6 +62,7 @@ import {
   ContentCopy as CopyIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { dataService, FilterConfig as ServiceFilterConfig, DatasetVersion } from '../services/dataService';
 
 interface Dataset {
   dataset_id: string;
@@ -70,7 +71,9 @@ interface Dataset {
   columns: number;
   column_names: string[];
   data_types: Record<string, string>;
-  summary_stats: Record<string, any>;
+  summary_stats?: Record<string, any>;
+  column_info?: Record<string, any>;
+  upload_time?: string;
 }
 
 interface FilterConfig {
@@ -95,6 +98,12 @@ const DataExplorer: React.FC = () => {
   const [transformations, setTransformations] = useState<TransformationConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // New centralized data management state
+  const [currentVersionId, setCurrentVersionId] = useState<string>('');
+  const [datasetVersions, setDatasetVersions] = useState<DatasetVersion[]>([]);
+  const [showVersionManager, setShowVersionManager] = useState(false);
+  const [showClearCacheDialog, setShowClearCacheDialog] = useState(false);
   
   // Enhanced state for live data view and filtering
   const [filteredData, setFilteredData] = useState<any[]>([]);
@@ -156,8 +165,25 @@ const DataExplorer: React.FC = () => {
     if (selectedDataset) {
       fetchDatasetInfo(selectedDataset);
       fetchDatasetPreview(selectedDataset);
+      loadDatasetVersions(selectedDataset);
     }
   }, [selectedDataset]);
+
+  // Load dataset versions
+  const loadDatasetVersions = async (datasetId: string) => {
+    try {
+      const versions = await dataService.listDatasetVersions(datasetId);
+      setDatasetVersions(versions);
+      
+      // Set current version to original if available
+      const originalVersion = versions.find(v => dataService.isOriginalVersion(v.version_id));
+      if (originalVersion) {
+        setCurrentVersionId(originalVersion.version_id);
+      }
+    } catch (err: any) {
+      console.error('Failed to load dataset versions:', err);
+    }
+  };
 
   // Real-time filtering effect
   useEffect(() => {
@@ -197,7 +223,9 @@ const DataExplorer: React.FC = () => {
 
   const fetchDatasetInfo = async (datasetId: string) => {
     try {
+      console.log('DataExplorer: Fetching dataset info for:', datasetId);
       const response = await axios.get(`/dataset/${datasetId}`);
+      console.log('DataExplorer: Dataset info response:', response.data);
       setDatasetInfo(response.data);
       initializeFilters(response.data);
     } catch (err: any) {
@@ -264,8 +292,14 @@ const DataExplorer: React.FC = () => {
 
   const getColumnType = (columnName: string) => {
     if (!datasetInfo) return 'categorical';
-    const stats = datasetInfo.summary_stats[columnName];
-    return stats?.type || 'categorical';
+    // Check if we have column_info (new structure) or summary_stats (old structure)
+    if (datasetInfo.column_info && datasetInfo.column_info[columnName]) {
+      return datasetInfo.column_info[columnName].type || 'categorical';
+    }
+    if (datasetInfo.summary_stats && datasetInfo.summary_stats[columnName]) {
+      return datasetInfo.summary_stats[columnName].type || 'categorical';
+    }
+    return 'categorical';
   };
 
   // Enhanced filtering and data manipulation functions
@@ -596,38 +630,152 @@ const DataExplorer: React.FC = () => {
   };
 
   const applyFilters = async () => {
-    if (!selectedDataset) return;
+    if (!selectedDataset || !currentVersionId) return;
 
     try {
       setLoading(true);
       const activeFilters = filters.filter(f => f.enabled);
       
       if (activeFilters.length === 0) {
-        fetchDatasetPreview(selectedDataset);
+        showSnackbar('No active filters to apply', 'warning');
         return;
       }
 
-      const filterConfig: Record<string, any> = {};
-      activeFilters.forEach(filter => {
-        filterConfig[filter.column] = {
-          type: filter.type,
-          value: filter.value,
-        };
-      });
+      // Create a new filtered version using the centralized system
+      const versionName = `Filtered ${new Date().toLocaleString()}`;
+      const versionDescription = `Applied ${activeFilters.length} filters: ${activeFilters.map(f => `${f.column} ${f.type} ${f.value}`).join(', ')}`;
+      
+      console.log('Creating filtered version with filters:', activeFilters);
+      
+      // Convert local FilterConfig to ServiceFilterConfig
+      const serviceFilters: ServiceFilterConfig[] = activeFilters.map(filter => ({
+        column: filter.column,
+        type: filter.type as 'equals' | 'not_equals' | 'contains' | 'greater_than' | 'less_than' | 'between' | 'in_list' | 'is_null' | 'not_null',
+        value: filter.value,
+        enabled: filter.enabled
+      }));
 
-      const response = await axios.post(`/data/${selectedDataset}/filter`, filterConfig);
-      setPreviewData(response.data.preview_data);
-
-      // Persist filters as a transformation so state remains when navigating
-      await axios.post(`/data/${selectedDataset}/transform`, [
-        { type: 'apply_filters', config: { filters: filterConfig }, enabled: true }
-      ]);
-      showSnackbar('Filters applied and saved', 'success');
+      const result = await dataService.createFilteredVersion(
+        currentVersionId,
+        versionName,
+        versionDescription,
+        serviceFilters
+      );
+      
+      console.log('Created filtered version:', result);
+      
+      // Update the current version to the new filtered version
+      setCurrentVersionId(result.version_id);
+      
+      // Reload versions and data
+      await loadDatasetVersions(selectedDataset);
+      await loadVersionData(result.version_id);
+      
+      showSnackbar(`Created filtered version with ${result.version_info.row_count} rows`, 'success');
       
     } catch (err: any) {
+      console.error('Failed to apply filters:', err);
       setError(err.response?.data?.detail || 'Failed to apply filters');
+      showSnackbar('Failed to apply filters', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Load data for a specific version
+  // Clear cache and temporary versions
+  const clearCache = async () => {
+    try {
+      setLoading(true);
+      const result = await dataService.clearCache();
+      console.log('Cache cleared:', result);
+      
+      // Refresh the datasets and versions
+      await fetchDatasets();
+      if (selectedDataset) {
+        await loadDatasetVersions(selectedDataset);
+      }
+      
+      showSnackbar(result.message, 'success');
+      setShowClearCacheDialog(false);
+    } catch (err: any) {
+      console.error('Failed to clear cache:', err);
+      setError(err.response?.data?.detail || 'Failed to clear cache');
+      showSnackbar('Failed to clear cache', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadVersionData = async (versionId: string) => {
+    try {
+      const data = await dataService.getVersionData(versionId, 100);
+      console.log(`Loaded version data for ${versionId}:`, data);
+      console.log(`Data length: ${data.length}`);
+      if (data.length > 0) {
+        console.log(`First row:`, data[0]);
+        console.log(`Columns:`, Object.keys(data[0]));
+      }
+      setPreviewData(data);
+      
+      const versionInfo = await dataService.getVersionInfo(versionId);
+      
+      // Get column names from the data
+      const columnNames = data.length > 0 ? Object.keys(data[0]) : [];
+      
+      setDatasetInfo({
+        dataset_id: selectedDataset,
+        filename: versionInfo.name,
+        rows: versionInfo.row_count,
+        columns: versionInfo.column_count,
+        column_names: columnNames,
+        data_types: {},
+        summary_stats: {},
+        column_info: {},
+        upload_time: versionInfo.created_at
+      });
+      
+      // Update the current version ID
+      setCurrentVersionId(versionId);
+      
+      // Store the current version in localStorage so Data Visualizer can access it
+      localStorage.setItem(`currentVersion_${selectedDataset}`, versionId);
+      
+      console.log(`Switched to version: ${versionId} with ${versionInfo.row_count} rows`);
+      
+      // If data is empty but version says it has rows, try to reload
+      if (data.length === 0 && versionInfo.row_count > 0) {
+        console.log('Data is empty but version has rows, trying to reload...');
+        setTimeout(async () => {
+          try {
+            const retryData = await dataService.getVersionData(versionId, 100);
+            console.log(`Retry loaded data: ${retryData.length} rows`);
+            if (retryData.length > 0) {
+              setPreviewData(retryData);
+            }
+          } catch (retryErr) {
+            console.error('Retry failed:', retryErr);
+          }
+        }, 1000);
+      }
+    } catch (err: any) {
+      console.error('Failed to load version data:', err);
+      if (err.response?.status === 404) {
+        console.log(`Version ${versionId} not found, trying to reload versions...`);
+        // Try to reload versions and fall back to original
+        try {
+          await loadDatasetVersions(selectedDataset);
+          const originalVersion = datasetVersions.find(v => v.version_id.endsWith('_original'));
+          if (originalVersion) {
+            console.log(`Falling back to original version: ${originalVersion.version_id}`);
+            await loadVersionData(originalVersion.version_id);
+            return;
+          }
+        } catch (fallbackErr) {
+          console.error('Fallback failed:', fallbackErr);
+        }
+      }
+      setError('Failed to load version data');
     }
   };
 
@@ -1196,6 +1344,74 @@ const DataExplorer: React.FC = () => {
                      Add Filter ({getAvailableColumns().length} available)
                    </Button>
 
+                   {/* Apply Filters Button */}
+                   {filters.length > 0 && (
+                     <Button
+                       variant="contained"
+                       size="small"
+                       startIcon={<FilterIcon />}
+                       onClick={applyFilters}
+                       fullWidth
+                       disabled={!selectedDataset || loading || filters.filter(f => f.enabled).length === 0}
+                       sx={{ mt: 1 }}
+                       color="primary"
+                     >
+                       Apply Filters ({filters.filter(f => f.enabled).length} active)
+                     </Button>
+                   )}
+
+                   {/* Version Manager */}
+                   {selectedDataset && datasetVersions.length > 0 && (
+                     <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
+                       <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                         Dataset Versions
+                       </Typography>
+                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                         {datasetVersions.map((version) => (
+                           <Box
+                             key={version.version_id}
+                             sx={{
+                               p: 1,
+                               borderRadius: 1,
+                               bgcolor: version.version_id === currentVersionId ? 'primary.light' : 'grey.100',
+                               cursor: 'pointer',
+                               border: version.version_id === currentVersionId ? '2px solid' : '1px solid',
+                               borderColor: version.version_id === currentVersionId ? 'primary.main' : 'grey.300',
+                               '&:hover': {
+                                 bgcolor: version.version_id === currentVersionId ? 'primary.light' : 'grey.200'
+                               }
+                             }}
+                             onClick={() => {
+                               setCurrentVersionId(version.version_id);
+                               loadVersionData(version.version_id);
+                             }}
+                           >
+                             <Typography variant="body2" fontWeight={version.version_id === currentVersionId ? 'bold' : 'normal'}>
+                               {version.name}
+                             </Typography>
+                             <Typography variant="caption" color="text.secondary">
+                               {version.row_count} rows • {new Date(version.created_at).toLocaleString()}
+                             </Typography>
+                             {version.filters_applied.length > 0 && (
+                               <Typography variant="caption" color="primary.main">
+                                 {version.filters_applied.length} filters applied
+                               </Typography>
+                             )}
+                           </Box>
+                         ))}
+                       </Box>
+                       <Button
+                         size="small"
+                         variant="outlined"
+                         onClick={() => setShowVersionManager(true)}
+                         sx={{ mt: 1 }}
+                         fullWidth
+                       >
+                         Manage Versions
+                       </Button>
+                     </Box>
+                   )}
+
                    {/* Data Manipulation Buttons */}
                    <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
                      <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
@@ -1241,6 +1457,17 @@ const DataExplorer: React.FC = () => {
                          fullWidth
                        >
                          Delete
+                       </Button>
+                       <Button
+                         variant="outlined"
+                         size="small"
+                         startIcon={<DeleteIcon />}
+                         onClick={() => setShowClearCacheDialog(true)}
+                         color="warning"
+                         fullWidth
+                         sx={{ mt: 1 }}
+                       >
+                         Clear Cache & Reset
                        </Button>
                      </Box>
                    </Box>
@@ -1864,6 +2091,42 @@ const DataExplorer: React.FC = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* Clear Cache Confirmation Dialog */}
+      <Dialog open={showClearCacheDialog} onClose={() => setShowClearCacheDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Clear Cache & Reset</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            This will clear all temporary versions and filtered data, keeping only your original uploaded datasets.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <strong>What will be deleted:</strong>
+          </Typography>
+          <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+            <li>All filtered versions of datasets</li>
+            <li>All temporary cached data</li>
+            <li>All version history and metadata</li>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <strong>What will be kept:</strong>
+          </Typography>
+          <Box component="ul" sx={{ pl: 2, mb: 2 }}>
+            <li>Original uploaded datasets</li>
+            <li>Persistent data files</li>
+          </Box>
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            This action cannot be undone. Make sure you have saved any important filtered versions.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowClearCacheDialog(false)}>
+            Cancel
+          </Button>
+          <Button onClick={clearCache} variant="contained" color="warning" disabled={loading}>
+            {loading ? 'Clearing...' : 'Clear Cache'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

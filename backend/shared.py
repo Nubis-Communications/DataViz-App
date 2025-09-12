@@ -3,8 +3,12 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, Any
 
+# Import the centralized data manager
+from data_manager import data_manager, FilterConfig, FilterType
+
 # Global storage for uploaded datasets (in production, use database)
-datasets = {}
+# This is now managed by the centralized data_manager
+datasets = {}  # Keep for backward compatibility
 dataset_counter = 0
 
 class DataInfo:

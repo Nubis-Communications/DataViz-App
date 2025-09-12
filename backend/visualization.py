@@ -27,6 +27,31 @@ router = APIRouter(prefix="/visualize", tags=["visualization"])
 # Import from shared module
 from shared import datasets
 
+def apply_data_transformation(series: pd.Series, transform_type: str, bins: int = 10) -> pd.Series:
+    """Apply data transformation based on the specified type"""
+    if transform_type == 'numeric_to_categorical':
+        # Convert numeric to categorical by binning
+        if pd.api.types.is_numeric_dtype(series):
+            return pd.cut(series, bins=bins, duplicates='drop')
+        return series
+    elif transform_type == 'categorical_to_numeric':
+        # Convert categorical to numeric (label encoding)
+        if pd.api.types.is_categorical_dtype(series) or series.dtype == 'object':
+            return pd.Categorical(series).codes
+        return series
+    elif transform_type == 'datetime_to_numeric':
+        # Convert datetime to numeric (timestamp)
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return series.astype('int64') // 10**9  # Convert to seconds
+        return series
+    elif transform_type == 'datetime_to_categorical':
+        # Convert datetime to categorical (extract time periods)
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return series.dt.strftime('%Y-%m')
+        return series
+    else:
+        return series
+
 # Set matplotlib style for professional plots
 try:
     plt.style.use('seaborn-v0_8')
@@ -506,17 +531,46 @@ async def json_scatter(
     sample: Optional[int] = Query(None, description="Optional down-sample size"),
     group: Optional[str] = Query(None, description="Optional categorical column to group by for facets"),
     color: Optional[str] = Query(None, description="Optional column to use for marker color (numeric preferred)"),
-    size: Optional[str] = Query(None, description="Optional column to use for marker size (numeric preferred)")
+    size: Optional[str] = Query(None, description="Optional column to use for marker size (numeric preferred)"),
+    x_transform: Optional[str] = Query(None, description="Transform for x-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical"),
+    y_transform: Optional[str] = Query(None, description="Transform for y-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical")
 ):
     """Return raw x/y arrays and basic stats for client-side rendering."""
-    if dataset_id not in datasets:
+    from data_manager import data_manager
+    
+    # Get the original version of the dataset
+    original_version_id = f"{dataset_id}_original"
+    if original_version_id not in data_manager.versions:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    df = datasets[dataset_id].df
+    df = data_manager.datasets[original_version_id]
     if x not in df.columns or y not in df.columns:
         raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
 
     warnings: List[str] = []
+    
+    # Apply data transformations if specified
+    if x_transform:
+        try:
+            original_x = df[x].copy()
+            df[x] = apply_data_transformation(df[x], x_transform)
+            warnings.append(f"Applied {x_transform} transformation to X-axis column '{x}'")
+        except Exception as e:
+            logger.error(f"Failed to apply {x_transform} to X-axis '{x}': {str(e)}")
+            warnings.append(f"Failed to apply {x_transform} to X-axis: {str(e)}")
+            # Restore original data if transformation fails
+            df[x] = original_x
+    
+    if y_transform:
+        try:
+            original_y = df[y].copy()
+            df[y] = apply_data_transformation(df[y], y_transform)
+            warnings.append(f"Applied {y_transform} transformation to Y-axis column '{y}'")
+        except Exception as e:
+            logger.error(f"Failed to apply {y_transform} to Y-axis '{y}': {str(e)}")
+            warnings.append(f"Failed to apply {y_transform} to Y-axis: {str(e)}")
+            # Restore original data if transformation fails
+            df[y] = original_y
 
     def cast_numeric(series_name: Optional[str]) -> Optional[List[Optional[float]]]:
         if not series_name or series_name not in df.columns:
@@ -601,10 +655,14 @@ async def json_series(
     sample: Optional[int] = Query(None)
 ):
     """Return index as x and column values as y for a simple series plot."""
-    if dataset_id not in datasets:
+    from data_manager import data_manager
+    
+    # Get the original version of the dataset
+    original_version_id = f"{dataset_id}_original"
+    if original_version_id not in data_manager.versions:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    df = datasets[dataset_id].df
+    df = data_manager.datasets[original_version_id]
     if column not in df.columns:
         raise HTTPException(status_code=400, detail=f"Column not found. Available: {list(df.columns)}")
 
@@ -627,16 +685,43 @@ async def json_bar(
     category: str = Query(...),
     value: str = Query(...),
     agg: str = Query("mean", description="Aggregation: mean|sum|count"),
-    bins: int = Query(10, description="Number of bins when category is numeric")
+    bins: int = Query(10, description="Number of bins when category is numeric"),
+    x_transform: Optional[str] = Query(None, description="Transform for x-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical"),
+    y_transform: Optional[str] = Query(None, description="Transform for y-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical")
 ):
-    if dataset_id not in datasets:
+    from data_manager import data_manager
+    
+    # Get the original version of the dataset
+    original_version_id = f"{dataset_id}_original"
+    if original_version_id not in data_manager.versions:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    df = datasets[dataset_id].df
+    df = data_manager.datasets[original_version_id]
     if category not in df.columns or value not in df.columns:
         raise HTTPException(status_code=400, detail=f"Columns not found. Available: {list(df.columns)}")
 
     warnings: List[str] = []
+    
+    # Apply data transformations if specified
+    if x_transform:
+        try:
+            original_category = df[category].copy()
+            df[category] = apply_data_transformation(df[category], x_transform, bins)
+            warnings.append(f"Applied {x_transform} transformation to category column '{category}'")
+        except Exception as e:
+            logger.error(f"Failed to apply {x_transform} to category '{category}': {str(e)}")
+            warnings.append(f"Failed to apply {x_transform} to category: {str(e)}")
+            df[category] = original_category
+    
+    if y_transform:
+        try:
+            original_value = df[value].copy()
+            df[value] = apply_data_transformation(df[value], y_transform)
+            warnings.append(f"Applied {y_transform} transformation to value column '{value}'")
+        except Exception as e:
+            logger.error(f"Failed to apply {y_transform} to value '{value}': {str(e)}")
+            warnings.append(f"Failed to apply {y_transform} to value: {str(e)}")
+            df[value] = original_value
     # If category is numeric, bin it
     cat_series = df[category]
     if pd.api.types.is_numeric_dtype(cat_series) or pd.api.types.is_datetime64_any_dtype(cat_series):
@@ -679,3 +764,195 @@ async def json_bar(
         "stats": _basic_stats([v for v in y_out if v is not None]),
         "warnings": warnings,
     }
+
+@router.get("/{dataset_id}/json_histogram")
+async def json_histogram(
+    dataset_id: str,
+    x: str = Query(..., description="Column name for histogram"),
+    bins: int = Query(20, description="Number of bins"),
+    x_transform: Optional[str] = Query(None, description="Transform for x-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical")
+):
+    """Get histogram data as JSON"""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    data_info = datasets[dataset_id]
+    df = data_info.df
+    
+    try:
+        warnings: List[str] = []
+        
+        # Apply data transformations if specified
+        if x_transform:
+            try:
+                df[x] = apply_data_transformation(df[x], x_transform, bins)
+                warnings.append(f"Applied {x_transform} transformation to column '{x}'")
+            except Exception as e:
+                warnings.append(f"Failed to apply {x_transform}: {str(e)}")
+        
+        if not pd.api.types.is_numeric_dtype(df[x]):
+            raise HTTPException(status_code=400, detail=f"Column '{x}' must be numeric for histogram")
+        
+        # Calculate histogram
+        hist, bin_edges = np.histogram(df[x].dropna(), bins=bins)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        return {
+            "x": sanitize_json_output(bin_centers.tolist()),
+            "y": sanitize_json_output(hist.tolist()),
+            "x_label": x,
+            "y_label": "Frequency",
+            "stats": {
+                "total_points": len(df[x].dropna()),
+                "bins": bins,
+                "x_range": [float(df[x].min()), float(df[x].max())]
+            },
+            "warnings": warnings
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating histogram: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating histogram: {str(e)}")
+
+@router.get("/{dataset_id}/json_box")
+async def json_box_plot(
+    dataset_id: str,
+    x: str = Query(..., description="Column name for categories"),
+    y: str = Query(..., description="Column name for values"),
+    x_transform: Optional[str] = Query(None, description="Transform for x-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical"),
+    y_transform: Optional[str] = Query(None, description="Transform for y-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical")
+):
+    """Get box plot data as JSON"""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    data_info = datasets[dataset_id]
+    df = data_info.df
+    
+    try:
+        warnings: List[str] = []
+        
+        # Apply data transformations if specified
+        if x_transform:
+            try:
+                df[x] = apply_data_transformation(df[x], x_transform)
+                warnings.append(f"Applied {x_transform} transformation to X-axis column '{x}'")
+            except Exception as e:
+                warnings.append(f"Failed to apply {x_transform} to X-axis: {str(e)}")
+        
+        if y_transform:
+            try:
+                df[y] = apply_data_transformation(df[y], y_transform)
+                warnings.append(f"Applied {y_transform} transformation to Y-axis column '{y}'")
+            except Exception as e:
+                warnings.append(f"Failed to apply {y_transform} to Y-axis: {str(e)}")
+        
+        if not pd.api.types.is_numeric_dtype(df[y]):
+            raise HTTPException(status_code=400, detail=f"Column '{y}' must be numeric for box plot")
+        
+        # Group data by x categories
+        grouped_data = df.groupby(x)[y].apply(list).to_dict()
+        
+        # Calculate box plot statistics for each group
+        box_data = []
+        categories = []
+        
+        for category, values in grouped_data.items():
+            if len(values) > 0:
+                q1 = np.percentile(values, 25)
+                q2 = np.percentile(values, 50)  # median
+                q3 = np.percentile(values, 75)
+                iqr = q3 - q1
+                lower_fence = q1 - 1.5 * iqr
+                upper_fence = q3 + 1.5 * iqr
+                
+                # Filter outliers
+                outliers = [v for v in values if v < lower_fence or v > upper_fence]
+                inliers = [v for v in values if lower_fence <= v <= upper_fence]
+                
+                box_data.append({
+                    "category": str(category),
+                    "q1": float(q1),
+                    "median": float(q2),
+                    "q3": float(q3),
+                    "lower_fence": float(lower_fence),
+                    "upper_fence": float(upper_fence),
+                    "outliers": sanitize_json_output(outliers),
+                    "inliers": sanitize_json_output(inliers)
+                })
+                categories.append(str(category))
+        
+        return {
+            "box_data": box_data,
+            "categories": categories,
+            "x_label": x,
+            "y_label": y,
+            "stats": {
+                "total_groups": len(categories),
+                "y_range": [float(df[y].min()), float(df[y].max())]
+            },
+            "warnings": warnings
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating box plot: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating box plot: {str(e)}")
+
+@router.get("/{dataset_id}/json_heatmap")
+async def json_heatmap(
+    dataset_id: str,
+    x: str = Query(..., description="Column name for x-axis"),
+    y: str = Query(..., description="Column name for y-axis"),
+    z: str = Query(..., description="Column name for values"),
+    x_transform: Optional[str] = Query(None, description="Transform for x-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical"),
+    y_transform: Optional[str] = Query(None, description="Transform for y-axis: numeric_to_categorical, categorical_to_numeric, datetime_to_numeric, datetime_to_categorical")
+):
+    """Get heatmap data as JSON"""
+    if dataset_id not in datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    data_info = datasets[dataset_id]
+    df = data_info.df
+    
+    try:
+        warnings: List[str] = []
+        
+        # Apply data transformations if specified
+        if x_transform:
+            try:
+                df[x] = apply_data_transformation(df[x], x_transform)
+                warnings.append(f"Applied {x_transform} transformation to X-axis column '{x}'")
+            except Exception as e:
+                warnings.append(f"Failed to apply {x_transform} to X-axis: {str(e)}")
+        
+        if y_transform:
+            try:
+                df[y] = apply_data_transformation(df[y], y_transform)
+                warnings.append(f"Applied {y_transform} transformation to Y-axis column '{y}'")
+            except Exception as e:
+                warnings.append(f"Failed to apply {y_transform} to Y-axis: {str(e)}")
+        
+        if not pd.api.types.is_numeric_dtype(df[z]):
+            raise HTTPException(status_code=400, detail=f"Column '{z}' must be numeric for heatmap")
+        
+        # Create pivot table
+        pivot_table = df.pivot_table(values=z, index=y, columns=x, aggfunc='mean', fill_value=0)
+        
+        return {
+            "x": sanitize_json_output(pivot_table.columns.tolist()),
+            "y": sanitize_json_output(pivot_table.index.tolist()),
+            "z": sanitize_json_output(pivot_table.values.tolist()),
+            "x_label": x,
+            "y_label": y,
+            "z_label": z,
+            "stats": {
+                "x_categories": len(pivot_table.columns),
+                "y_categories": len(pivot_table.index),
+                "z_range": [float(pivot_table.min().min()), float(pivot_table.max().max())]
+            },
+            "warnings": warnings
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating heatmap: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating heatmap: {str(e)}")

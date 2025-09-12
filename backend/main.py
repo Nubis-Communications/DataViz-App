@@ -121,7 +121,12 @@ async def upload_file(
         dataset_id = f"dataset_{dataset_counter}"
         dataset_counter += 1
         
+        # Store in both old system (for backward compatibility) and new system
         datasets[dataset_id] = DataInfo(df, file.filename, datetime.now())
+        
+        # Also add to centralized data manager
+        from data_manager import data_manager
+        version_id = data_manager.add_dataset(dataset_id, df, file.filename)
         
         return {
             "dataset_id": dataset_id,
@@ -156,29 +161,53 @@ async def list_datasets():
 @app.get("/dataset/{dataset_id}")
 async def get_dataset_info(dataset_id: str):
     """Get detailed information about a specific dataset"""
-    if dataset_id not in datasets:
+    from data_manager import data_manager
+    
+    # Get the original version of the dataset
+    original_version_id = f"{dataset_id}_original"
+    if original_version_id not in data_manager.versions:
         raise HTTPException(status_code=404, detail="Dataset not found")
     
-    data_info = datasets[dataset_id]
+    version_info = data_manager.versions[original_version_id]
+    dataset_data = data_manager.datasets[original_version_id]
+    
+    logger.info(f"Dataset info requested for {dataset_id}: {version_info.row_count} rows")
+    
+    # Get column information with proper data types
+    column_info = {}
+    for col in dataset_data.columns:
+        col_series = dataset_data[col]
+        detected_type = data_manager.data_type_converter.detect_column_type(col_series)
+        column_info[col] = {
+            "type": detected_type.value,
+            "dtype": str(col_series.dtype),
+            "unique_count": int(col_series.nunique()),
+            "null_count": int(col_series.isnull().sum())
+        }
+    
     return {
         "dataset_id": dataset_id,
-        "filename": data_info.filename,
-        "rows": len(data_info.df),
-        "columns": len(data_info.df.columns),
-        "column_names": list(data_info.df.columns),
-        "data_types": data_info.data_types,
-        "summary_stats": data_info.summary_stats,
-        "upload_time": data_info.upload_time.isoformat()
+        "filename": version_info.name,
+        "rows": int(version_info.row_count),
+        "columns": int(version_info.column_count),
+        "column_names": list(dataset_data.columns),
+        "column_info": column_info,
+        "data_types": {col: info["type"] for col, info in column_info.items()},
+        "upload_time": version_info.created_at.isoformat()
     }
 
 @app.get("/dataset/{dataset_id}/preview")
 async def get_dataset_preview(dataset_id: str, rows: int = 10):
     """Get preview of dataset data"""
-    if dataset_id not in datasets:
+    from data_manager import data_manager
+    
+    # Get the original version of the dataset
+    original_version_id = f"{dataset_id}_original"
+    if original_version_id not in data_manager.versions:
         raise HTTPException(status_code=404, detail="Dataset not found")
     
-    data_info = datasets[dataset_id]
-    preview_df = data_info.df.head(rows)
+    dataset_data = data_manager.datasets[original_version_id]
+    preview_df = dataset_data.head(rows)
     
     # Convert to JSON-serializable format
     preview_data = []
@@ -192,6 +221,8 @@ async def get_dataset_preview(dataset_id: str, rows: int = 10):
                 row_dict[col] = float(value)
             elif isinstance(value, pd.Timestamp):
                 row_dict[col] = value.isoformat()
+            elif isinstance(value, np.ndarray):
+                row_dict[col] = value.tolist()
             else:
                 row_dict[col] = str(value)
         preview_data.append(row_dict)
@@ -199,7 +230,7 @@ async def get_dataset_preview(dataset_id: str, rows: int = 10):
     return {
         "dataset_id": dataset_id,
         "preview_data": preview_data,
-        "total_rows": len(data_info.df)
+        "total_rows": int(len(dataset_data))
     }
 
 @app.post("/dataset/{dataset_id}/update-types")
